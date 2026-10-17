@@ -118,7 +118,7 @@ wait_ready() {
 start_stock() {  # the stock server builds (first time) or loads (afterwards) its own engine bundle from the checkpoint
   use_stack stock
   local spec=${STOCK_SPEC//@ASSIST@/$ASSIST}
-  (cd $STOCK_ROOT && exec python -m experimental.server $CKPT --cache-dir $STOCK_CACHE --host 0.0.0.0 --port $1 \
+  (cd $STACK_ROOT && exec python -m experimental.server $CKPT --cache-dir $STOCK_CACHE --host 0.0.0.0 --port $1 \
      --served-model-name local $STOCK_ARGS --speculative-config "$spec") > $LOG_DIR/$MODEL-$PROFILE-stock-server.log 2>&1 &
   SERVER_PID=$!
 }
@@ -133,6 +133,7 @@ start_fast() {
 stop_server() { kill $SERVER_PID 2>/dev/null || true; wait $SERVER_PID 2>/dev/null || true; sleep 5; }
 
 build_stock() {
+  mkdir -p $STOCK_CACHE
   step "stock stack: its server builds its own engine on first start (can take a long time)"
   start_stock $BENCH_PORT
   if wait_ready $BENCH_PORT $SERVER_PID 14400; then
