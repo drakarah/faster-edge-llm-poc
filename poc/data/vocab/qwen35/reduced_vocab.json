@@ -1,0 +1,17 @@
+{
+  "reduced_vocab_size": 32768,
+  "original_vocab_size": 248077,
+  "mandatory_tokens": 289,
+  "sources": [
+    "nl=text/20231101.nl-00000-of-00006.parquet",
+    "fr=text/20231101.fr-00000-of-00017.parquet",
+    "en=text/20231101.en-00000-of-00041.parquet",
+    "text/code_json.txt"
+  ],
+  "articles_per_language": 20000,
+  "heldout_coverage_pct": {
+    "nl": 97.144,
+    "fr": 95.925,
+    "en": 92.007
+  }
+}
