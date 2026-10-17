@@ -13,6 +13,10 @@ SERVE_ARGS="--draft-top-k 2 --draft-step 5 --verify-tree-size 12 --enable-contex
 SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MTP_SUFFIX_DRAFT=6 EDGELLM_MTP_SUFFIX_MIN=2"
 [ "$PROFILE" = orin ] && SERVE_ENV="$SERVE_ENV EDGELLM_INT4_GEMV_MAX_M=1"
 [ "$PROFILE" = dgpu ] && SERVE_ENV="$SERVE_ENV EDGELLM_GRAMMAR_CACHE_MB=4096"
+# INT8 tensor-core prefill GEMM (W4A8) for prompts of 64+ tokens. On the Jetson the two ops with outlier inputs (per-layer-embedding gate,
+# down projection) stay on the FP16 path, which restored HumanEval there; on the discrete GPU all ops use it (not yet checked on that profile).
+[ "$PROFILE" = orin ] && SERVE_ENV="$SERVE_ENV EDGELLM_INT4_W4A8_MIN_M=64 EDGELLM_INT4_W4A8_MAX_K=8192 EDGELLM_INT4_W4A8_MIN_N=512"
+[ "$PROFILE" = dgpu ] && SERVE_ENV="$SERVE_ENV EDGELLM_INT4_W4A8_MIN_M=64"
 # --- stock stack: upstream's documented path (the server builds its own engine from the checkpoint) ---
 STOCK_ARGS="--max-input-len $MAXIN --max-kv-cache-capacity $CAP --enable-context-reuse"
 STOCK_SPEC='{"method":"mtp","model":"@ASSIST@"}'

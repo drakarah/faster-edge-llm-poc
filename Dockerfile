@@ -17,7 +17,7 @@ ARG BUILD_JOBS=8
 ARG STOCK_REPO=https://github.com/NVIDIA/TensorRT-Edge-LLM.git
 ARG STOCK_REF=0f52705723abfa8c6702654bfdcc082a728ed353
 ARG FAST_REPO=https://github.com/drakarah/TensorRT-Edge-LLM.git
-ARG FAST_REF=d8ccceb92f00365c8c85c95db676f2dde70922fb
+ARG FAST_REF=ade06d3e59a451a1d47ff7e9353166355bcfa487
 
 # Python dependencies of the exporter, the server and the quantisation tools (torch and numpy come from the base image).
 COPY poc/build/pins.txt /tmp/pins.txt
@@ -29,11 +29,12 @@ RUN git clone "${STOCK_REPO}" /opt/stock && git -C /opt/stock checkout "${STOCK_
 RUN git clone "${FAST_REPO}" /opt/fast && git -C /opt/fast checkout "${FAST_REF}" \
     && git -C /opt/fast submodule update --init --recursive
 
-# Both stacks are compiled the same way. Only the fast stack gets the discrete-GPU prefill option: FP16 accumulation in the
-# INT4 GEMM (twice the tensor rate on GeForce parts; no gain on a Jetson, so it is left off there).
+# Both stacks are compiled the same way. Only the fast stack gets two extra build options: the INT4 GEMM that applies the group
+# scale to FP32 partial sums once per quantisation group (EDGELLM_INT4_GEMM_GROUP_FLUSH, fewer instructions per tensor op), and on
+# the discrete GPU FP16 accumulation in the INT4 GEMM (twice the tensor rate on GeForce parts; no gain on a Jetson, so it is left off there).
 RUN PROFILE=${PROFILE} GPU_ARCH=${GPU_ARCH} BUILD_JOBS=${BUILD_JOBS} build_edgellm.sh /opt/stock
 RUN PROFILE=${PROFILE} GPU_ARCH=${GPU_ARCH} BUILD_JOBS=${BUILD_JOBS} \
-    $( [ "${PROFILE}" = dgpu ] && echo EDGELLM_INT4_GEMM_FP16_ACC_MIN_BM=64 ) build_edgellm.sh /opt/fast
+    EDGELLM_INT4_GEMM_GROUP_FLUSH=1 $( [ "${PROFILE}" = dgpu ] && echo EDGELLM_INT4_GEMM_FP16_ACC_MIN_BM=64 ) build_edgellm.sh /opt/fast
 
 COPY poc /poc
 ENV PYTHONDONTWRITEBYTECODE=1 PROFILE=${PROFILE}

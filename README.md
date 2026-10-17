@@ -78,6 +78,8 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 |---|---|
 | Image build for `PROFILE=orin` (both stacks compile from the pinned commits on a Jetson AGX Orin) | done |
 | Fork changes the comparison rests on (measured separately on the Orin, kernel level and replay level) | e.g. the exact INT8 KV conversion in the decode attention: replay of 60 recorded requests 121.4 s to 116.75 s, decode +3.5%, bit-exact |
+| INT8 tensor-core prompt pass (W4A8) for `gemma4-e4b` (prompts of 64+ tokens) | on: Orin runs it on all projections except the two with outlier inputs (per-layer-embedding gate, down projection); measured prompt speed +10-12% and HumanEval 89.0% vs 88.4% (W4A16), but on structured-output requests it leans to slightly longer answers (about +3% output tokens, paired replay). The discrete-GPU profile runs it on every projection and has **not** been checked: the kernel was only run on sm_87 |
+| INT4 decode GEMM with the group scale applied to FP32 partial sums (fewer instructions per tensor op) | on in the optimised build: kernel 6-21% faster at the decode batch size, whole-replay effect flat within noise; only run on sm_87 |
 | Builder (export, engine build) -> bench -> serve through `docker compose up` on the Orin, `MODEL=gemma4-e4b` | first run started and then stopped by hand during the export; **not completed yet** |
 | Quantisation from scratch inside the builder (`gptq`, needs `HF_TOKEN`) | the steps are the tools that produced our checkpoint, but this pipeline has not been run through the container yet |
 | The stock stack loading our quantised checkpoint (`gemma4_text`, MTP assistant) and building its own engine | **untested** |
