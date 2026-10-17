@@ -142,6 +142,7 @@ def cmd_report(a):
     rows = [("Prefill, tokens/s (higher is better)", "prefill_tok_s", "{:,.0f}", True),
             ("Decode, tokens/s (higher is better)", "decode_tok_s", "{:.1f}", True),
             (f"Replay of {fast[0]['replay_calls']} recorded requests, seconds (lower is better)", "replay_s", "{:.1f}", False),
+            ("Replay output tokens in total (the stacks do not answer with the same length)", "replay_completion_tokens", "{:,.0f}", False),
             *([("HumanEval generation, tokens/s (higher is better)", "he_tok_s", "{:.1f}", True)] if he else []),
             ("GPU memory used, MiB", "gpu_memory_mib", "{:,.0f}", False)]
     out = [f"### {a.model} on {a.profile}: stock Edge-LLM vs optimised fork ({len(fast)} rounds, medians)", "",
@@ -150,7 +151,7 @@ def cmd_report(a):
         s, f_ = med(stock, key), med(fast, key)
         if f_ is None:
             continue
-        up = "" if not s else f"**{(f_ / s if higher else s / f_):.2f}x**"
+        up = "" if (not s or key == "replay_completion_tokens") else f"**{(f_ / s if higher else s / f_):.2f}x**"
         out.append(f"| {name} | {fmt.format(s) if s else 'did not run'} | {fmt.format(f_)} | {up} |")
     if he:
         def hp(rs):

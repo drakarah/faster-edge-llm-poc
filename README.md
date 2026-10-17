@@ -72,7 +72,7 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 
 ## Status
 
-**Work in progress: not yet validated end to end.** What has been checked and what has not:
+**First end-to-end run done on the Orin only.** What has been checked and what has not:
 
 | | state |
 |---|---|
@@ -80,11 +80,23 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 | Fork changes the comparison rests on (measured separately on the Orin, kernel level and replay level) | e.g. the exact INT8 KV conversion in the decode attention: replay of 60 recorded requests 121.4 s to 116.75 s, decode +3.5%, bit-exact |
 | INT8 tensor-core prompt pass (W4A8) for `gemma4-e4b` (prompts of 64+ tokens) | on: Orin runs it on all projections except the two with outlier inputs (per-layer-embedding gate, down projection); measured prompt speed +10-12% and HumanEval 89.0% vs 88.4% (W4A16), but on structured-output requests it leans to slightly longer answers (about +3% output tokens, paired replay). The discrete-GPU profile runs it on every projection and has **not** been checked: the kernel was only run on sm_87 |
 | INT4 decode GEMM with the group scale applied to FP32 partial sums (fewer instructions per tensor op) | on in the optimised build: kernel 6-21% faster at the decode batch size, whole-replay effect flat within noise; only run on sm_87 |
-| Builder (export, engine build) -> bench -> serve through `docker compose up` on the Orin, `MODEL=gemma4-e4b` | first run started and then stopped by hand during the export; **not completed yet** |
-| Quantisation from scratch inside the builder (`gptq`, needs `HF_TOKEN`) | the steps are the tools that produced our checkpoint, but this pipeline has not been run through the container yet |
-| The stock stack loading our quantised checkpoint (`gemma4_text`, MTP assistant) and building its own engine | **untested** |
+| Builder (export, engine build) -> bench -> serve through `docker compose up` on the Orin, `MODEL=gemma4-e4b` | **done end to end** (one run, 2026-10-18: engines built inside the containers, 2 benchmark rounds, optimised server started) |
+| Quantisation from scratch inside the builder (`gptq`, needs `HF_TOKEN`) | the run used the checkpoint prepared by the same tools beforehand; the from-scratch path has not been run through the container |
+| The stock stack loading our quantised checkpoint (`gemma4_text`, MTP assistant) and building its own engine | **works** (builds in about 8 minutes, input limit set to the full context because the stock engine has no chunked prompt pass) |
 | `PROFILE=dgpu` (RTX 40-series etc.) | **untested**: no such machine was available when this was written; the settings come from separate runs on an RTX 4060 |
 | `MODEL=gemma4-12b`, `MODEL=qwen35-4b` | **untested** through this pipeline |
 
-Measured numbers from this repository's own benchmark will be added here once the first complete run has finished; until then treat everything above the table as the intended behaviour, not a result.
+### First complete run (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, `gemma4-e4b`, 2 rounds, medians)
 
+| | stock | optimised | ratio |
+|---|---:|---:|---:|
+| Prefill, tokens/s | 1,405 | 2,129 | 1.52x |
+| Decode, tokens/s (probe prompt) | 21.4 | 105.2 | 4.9x |
+| HumanEval generation, tokens/s | 27.1 | 164.5 | 6.1x |
+| HumanEval pass@1 (greedy), per round | 138/164, 138/164 | 139/164, 138/164 | same within noise |
+| Replay of 60 recorded requests, seconds | 666.5 | 109.1 | 6.1x |
+| Replay output tokens | 27,882 | 10,298 | |
+
+Read the replay seconds together with the output tokens: the stock stack answers structured (JSON) requests with 2.7 times as many tokens, because it lets the model pad the JSON with long whitespace runs (51,000 whitespace characters in the stock answers against 6,000 in the optimised ones); the optimised stack caps those runs (`EDGELLM_JSON_MAX_WHITESPACE=20`). Tokens per second (decode, HumanEval) is the fair speed comparison; the replay seconds mix speed with that length difference. The stock arm also has no `gemma4` tool-call parser, so tool-call answers differ in format; only 5 of 60 greedy replay answers are identical to stock. The decode probe of the optimised stack varied between rounds (122.2 and 105.2 tok/s): it uses a short prompt and the first request after a server start; the HumanEval and replay numbers repeat to within 1%.
+
+Caveats of what is switched on in the optimised stack for this model: INT8 tensor-core prompt pass (W4A8, all projections except two on the Orin), group-scale-on-partial-sums INT4 GEMM, exact INT8 KV conversion in the decode attention. The two GEMM changes were only run on the Orin (sm_87).
