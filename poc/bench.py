@@ -12,7 +12,7 @@ Workloads (all greedy, temperature 0):
            in recorded order so prefix reuse sees a realistic sequence; total wall time
 """
 import humaneval
-import argparse, difflib, glob, json, os, statistics, subprocess, sys, time, urllib.request, uuid
+import argparse, difflib, glob, json, os, statistics, subprocess, sys, time, urllib.error, urllib.request, uuid
 
 DECODE_PROMPT = ("Write a detailed essay of at least 600 words on how a bicycle gearbox works, from the pedal "
                  "to the wheel. Use continuous prose, no lists.")
@@ -74,17 +74,23 @@ def content(resp):
 
 def replay(url, workload, calls):
     recs = [r for r in map(json.loads, open(workload)) if r.get("status") == 200][:calls]
-    times, answers, ctoks, ptoks = [], [], 0, 0
-    for r in recs:
+    times, answers, ctoks, ptoks, errors = [], [], 0, 0, []
+    for i, r in enumerate(recs):
         body = dict(r["request"]); body["model"] = "local"; body["stream"] = False; body["temperature"] = 0
         t0 = time.perf_counter()
-        with post(url, body) as f:
-            resp = json.loads(f.read())
+        try:
+            with post(url, body) as f:
+                resp = json.loads(f.read())
+        except urllib.error.HTTPError as e:  # a stack may refuse a request the other accepts: count it, keep going
+            errors.append(f"request {i}: HTTP {e.code} {e.read()[:300].decode(errors='replace')}")
+            print(errors[-1], flush=True)
+            answers.append("")
+            continue
         times.append(time.perf_counter() - t0)
         answers.append(content(resp))
         u = resp.get("usage") or {}
         ctoks += u.get("completion_tokens", 0); ptoks += u.get("prompt_tokens", 0)
-    return {"seconds": sum(times), "calls": len(times), "completion_tokens": ctoks, "prompt_tokens": ptoks,
+    return {"seconds": sum(times), "calls": len(times), "errors": errors, "completion_tokens": ctoks, "prompt_tokens": ptoks,
             "answers": answers}
 
 
@@ -105,13 +111,13 @@ def cmd_run(a):
     res["decode_tok_s"] = decode(a.url)
     r = replay(a.url, a.workload, a.calls)
     res.update({"replay_s": r["seconds"], "replay_calls": r["calls"], "replay_completion_tokens": r["completion_tokens"],
-                "replay_prompt_tokens": r["prompt_tokens"], "answers": r["answers"], "gpu_memory_mib": gpu_memory_mib()})
+                "replay_prompt_tokens": r["prompt_tokens"], "replay_errors": r["errors"], "answers": r["answers"], "gpu_memory_mib": gpu_memory_mib()})
     if a.humaneval:
         res.update(humaneval.run_humaneval(a.url, os.path.join(os.path.dirname(a.out), "humaneval-problems.json"), a.humaneval))
         print(f"{a.label}: HumanEval pass@1 {res['he_pass']}/{res['he_total']}, {res['he_tok_s']:.1f} tok/s")
     json.dump(res, open(a.out, "w"))
     print(f"{a.label}: prefill {res['prefill_tok_s']:.0f} tok/s, decode {res['decode_tok_s']:.1f} tok/s, "
-          f"replay-{r['calls']} {r['seconds']:.1f} s")
+          f"replay-{r['calls']} {r['seconds']:.1f} s" + (f", {len(r['errors'])} requests refused" if r["errors"] else ""))
 
 
 def med(rows, key):
@@ -150,6 +156,10 @@ def cmd_report(a):
         def hp(rs):
             return "did not run" if not rs else " / ".join(f"{r['he_pass']}/{r['he_total']}" for r in rs)
         out += ["", f"HumanEval pass@1 (greedy, public benchmark), per round: stock {hp(stock)}; optimised {hp(fast)}."]
+    refused = {n: sum(len(r.get("replay_errors", [])) for r in rs) for n, rs in (("stock", stock), ("optimised", fast)) if rs}
+    if any(refused.values()):
+        out += ["", "Requests refused by a server (not counted in its replay seconds; see `replay_errors` in `results/`): " +
+                ", ".join(f"{n} {c}" for n, c in refused.items() if c) + "."]
     if sim:
         out += ["", f"Greedy answers identical to stock: {sim[0]}/{sim[1]} (mean text similarity {sim[2]:.3f}). "
                 "Quantised weights are the same; the optimised stack also uses an INT8 KV cache and fused kernels, so some "

@@ -9,7 +9,7 @@ MAXIN=2048; CAP=10240; POOL=320; TREE=12              # engine: prompt tokens pe
 EXPORT_ENV="EDGELLM_FUSE_GEMMA4_INT4=1 EDGELLM_INT8_KV_SCALES=$KV_SCALES EDGELLM_GEMMA4_SPARSE_DRAFT_LOGITS=1"
 EXPORT_ARGS="--externalize-weights int4_ffn --mtp"
 INT8_EMBEDDINGS=1
-SERVE_ARGS="--draft-top-k 2 --draft-step 5 --verify-tree-size 12 --enable-context-reuse --tool-call-parser gemma4"
+SERVE_ARGS="--draft-top-k 2 --draft-step 5 --verify-tree-size 12 --enable-context-reuse"
 SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MTP_SUFFIX_DRAFT=6 EDGELLM_MTP_SUFFIX_MIN=2"
 [ "$PROFILE" = orin ] && SERVE_ENV="$SERVE_ENV EDGELLM_INT4_GEMV_MAX_M=1"
 [ "$PROFILE" = dgpu ] && SERVE_ENV="$SERVE_ENV EDGELLM_GRAMMAR_CACHE_MB=4096"
@@ -18,5 +18,6 @@ SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MTP_SUF
 [ "$PROFILE" = orin ] && SERVE_ENV="$SERVE_ENV EDGELLM_INT4_W4A8_MIN_M=64 EDGELLM_INT4_W4A8_MAX_K=8192 EDGELLM_INT4_W4A8_MIN_N=512"
 [ "$PROFILE" = dgpu ] && SERVE_ENV="$SERVE_ENV EDGELLM_INT4_W4A8_MIN_M=64"
 # --- stock stack: upstream's documented path (the server builds its own engine from the checkpoint) ---
-STOCK_ARGS="--max-input-len $MAXIN --max-kv-cache-capacity $CAP --enable-context-reuse"
+# upstream has no chunked prompt pass: the engine must take a whole prompt, so its input limit is the full context
+STOCK_ARGS="--max-input-len $CAP --max-kv-cache-capacity $CAP --enable-context-reuse --enable-auto-tool-choice"
 STOCK_SPEC='{"method":"mtp","model":"@ASSIST@"}'
