@@ -6,6 +6,7 @@ MODEL=${MODEL:-gemma4-e4b}               # gemma4-e4b | gemma4-12b | qwen35-4b
 PORT=${PORT:-8000}                       # port of the optimised server that stays up at the end (`serve`)
 BENCH_PORT=${BENCH_PORT:-18080}
 BENCH_CALLS=${BENCH_CALLS:-60}           # recorded requests replayed per run
+BENCH_HUMANEVAL=${BENCH_HUMANEVAL:-164}  # HumanEval problems per run (public benchmark; 0 = skip)
 BENCH_ROUNDS=${BENCH_ROUNDS:-2}          # stock, optimised, stock, optimised, ...: the order cancels drift (thermal, clocks)
 MODELS_DIR=$DATA/models
 CKPT_DIR=$DATA/checkpoints/$MODEL

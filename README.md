@@ -35,6 +35,7 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 | `MODEL` | `gemma4-e4b` (default), `gemma4-12b`, `qwen35-4b` | the three models we measured |
 | `HF_TOKEN` | token | needed for Gemma only |
 | `BENCH_CALLS`, `BENCH_ROUNDS` | 60, 2 | replayed requests per round, rounds per stack |
+| `BENCH_HUMANEVAL` | 164 | HumanEval problems per run (0 skips); public benchmark, pass@1 and tokens/s |
 | `DATA_DIR`, `PORT`, `BUILD_JOBS` | `./data`, 8000, 8 | |
 
 `PROFILE` picks the build target and the tuned settings that differ between the two GPU classes (all in `poc/config/`): a Jetson shares one DRAM between CPU and GPU, so host-memory tricks are off there, and FP16-accumulate prefill (twice the tensor rate on GeForce parts) is on only for `dgpu`.
@@ -50,6 +51,7 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 ## How the comparison is made fair
 
 * Same weights: both stacks load the same quantised checkpoint, built once by the builder.
+* **HumanEval** (`poc/humaneval.py`, `BENCH_HUMANEVAL`): the public 164-problem code benchmark, greedy, pass@1 plus generated tokens/s, same prompts for both stacks. The problems are fetched from the Hugging Face dataset `openai/openai_humaneval` on first use. Answers are scored by running the problem's unit tests in a child python process (empty environment, 20 s and 2 GiB limits) inside the bench container, so generated code is executed there.
 * Same prompts: the three workloads in `poc/bench.py` are identical for both: a fresh ~1.5k-token prompt for **prefill** (a nonce defeats prefix caching), a free-text generation for **decode**, and a **replay** of recorded requests (`poc/data/workload.jsonl`: 396 chat requests with JSON-schema answers, recorded from an application test-suite on synthetic data; the first `BENCH_CALLS` are sent one after another).
 * Same client: timings are taken from the HTTP client, the same way for both servers; greedy decoding.
 * Alternating order, medians over rounds; the first request after a start is a warm-up.

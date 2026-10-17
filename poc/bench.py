@@ -7,9 +7,11 @@
 Workloads (all greedy, temperature 0):
   prefill  a fresh ~1.5k-token prompt (a unique nonce defeats prefix caching); prompt tokens / time to first token
   decode   a long free-text generation; completion tokens after the first / time between first and last token
+  humaneval  optional (--humaneval N): the public HumanEval benchmark, pass@1 and generation tokens/s (poc/humaneval.py)
   replay   the first N of 396 recorded requests (structured JSON answers, tool-style prompts), sent one after another
            in recorded order so prefix reuse sees a realistic sequence; total wall time
 """
+import humaneval
 import argparse, difflib, glob, json, os, statistics, subprocess, sys, time, urllib.request, uuid
 
 DECODE_PROMPT = ("Write a detailed essay of at least 600 words on how a bicycle gearbox works, from the pedal "
@@ -104,6 +106,9 @@ def cmd_run(a):
     r = replay(a.url, a.workload, a.calls)
     res.update({"replay_s": r["seconds"], "replay_calls": r["calls"], "replay_completion_tokens": r["completion_tokens"],
                 "replay_prompt_tokens": r["prompt_tokens"], "answers": r["answers"], "gpu_memory_mib": gpu_memory_mib()})
+    if a.humaneval:
+        res.update(humaneval.run_humaneval(a.url, os.path.join(os.path.dirname(a.out), "humaneval-problems.json"), a.humaneval))
+        print(f"{a.label}: HumanEval pass@1 {res['he_pass']}/{res['he_total']}, {res['he_tok_s']:.1f} tok/s")
     json.dump(res, open(a.out, "w"))
     print(f"{a.label}: prefill {res['prefill_tok_s']:.0f} tok/s, decode {res['decode_tok_s']:.1f} tok/s, "
           f"replay-{r['calls']} {r['seconds']:.1f} s")
@@ -127,9 +132,11 @@ def cmd_report(a):
         pairs = [(x, y) for x, y in zip(stock[0]["answers"], fast[0]["answers"])]
         same = sum(x == y for x, y in pairs)
         sim = (same, len(pairs), statistics.mean(difflib.SequenceMatcher(None, x, y).ratio() for x, y in pairs))
+    he = fast[0].get("he_total")
     rows = [("Prefill, tokens/s (higher is better)", "prefill_tok_s", "{:,.0f}", True),
             ("Decode, tokens/s (higher is better)", "decode_tok_s", "{:.1f}", True),
             (f"Replay of {fast[0]['replay_calls']} recorded requests, seconds (lower is better)", "replay_s", "{:.1f}", False),
+            *([("HumanEval generation, tokens/s (higher is better)", "he_tok_s", "{:.1f}", True)] if he else []),
             ("GPU memory used, MiB", "gpu_memory_mib", "{:,.0f}", False)]
     out = [f"### {a.model} on {a.profile}: stock Edge-LLM vs optimised fork ({len(fast)} rounds, medians)", "",
            "| | stock | optimised | speed-up |", "|---|---:|---:|---:|"]
@@ -139,6 +146,10 @@ def cmd_report(a):
             continue
         up = "" if not s else f"**{(f_ / s if higher else s / f_):.2f}x**"
         out.append(f"| {name} | {fmt.format(s) if s else 'did not run'} | {fmt.format(f_)} | {up} |")
+    if he:
+        def hp(rs):
+            return "did not run" if not rs else " / ".join(f"{r['he_pass']}/{r['he_total']}" for r in rs)
+        out += ["", f"HumanEval pass@1 (greedy, public benchmark), per round: stock {hp(stock)}; optimised {hp(fast)}."]
     if sim:
         out += ["", f"Greedy answers identical to stock: {sim[0]}/{sim[1]} (mean text similarity {sim[2]:.3f}). "
                 "Quantised weights are the same; the optimised stack also uses an INT8 KV cache and fused kernels, so some "
@@ -152,6 +163,7 @@ def main():
     p = argparse.ArgumentParser(); sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run"); r.add_argument("--url", required=True); r.add_argument("--label", required=True)
     r.add_argument("--out", required=True); r.add_argument("--calls", type=int, default=60)
+    r.add_argument("--humaneval", type=int, default=0, help="HumanEval problems to run (0 = skip, max 164)")
     r.add_argument("--workload", default=os.path.join(os.path.dirname(__file__), "data", "workload.jsonl"))
     q = sub.add_parser("report"); q.add_argument("--results", required=True)
     q.add_argument("--model", required=True); q.add_argument("--profile", required=True)
