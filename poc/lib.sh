@@ -148,7 +148,9 @@ build_stock() {
 bench() {
   [ -f $FAST/.done ] || die "no optimised engine yet: run the builder first"
   report_clocks
-  rm -f $RESULT_DIR/$MODEL-$PROFILE-*-round*.json
+  # earlier results are kept: a new run must never destroy them
+  local old; old=$(ls $RESULT_DIR/$MODEL-$PROFILE-*-round*.json 2>/dev/null) || true
+  if [ -n "$old" ]; then local keep=$RESULT_DIR/previous-$(date +%Y%m%d-%H%M%S); mkdir -p $keep; mv $old $keep/; fi
   local r
   for r in $(seq 1 $BENCH_ROUNDS); do
     if [ ! -f $STOCK_CACHE/.failed ]; then

@@ -6,7 +6,8 @@
 
 Workloads (all greedy, temperature 0):
   prefill  a fresh ~1.5k-token prompt (a unique nonce defeats prefix caching); prompt tokens / time to first token
-  decode   a long free-text generation; completion tokens after the first / time between first and last token
+  decode   a long free-text generation; completion tokens after the first / time between first and last token; reported cold (first
+           request) and warm (same prompt again) separately
   humaneval  optional (--humaneval N): the public HumanEval benchmark, pass@1 and generation tokens/s (poc/humaneval.py)
   replay   the first N of 396 recorded requests (structured JSON answers, tool-style prompts), sent one after another
            in recorded order so prefix reuse sees a realistic sequence; total wall time
@@ -56,12 +57,15 @@ def prefill(url, runs=3):
     return statistics.median(out), pt
 
 
-def decode(url, runs=3):
-    out = []
-    for _ in range(runs):
+def decode(url, repeats=2):
+    """The same essay prompt is sent 1 + repeats times (a fresh nonce each time defeats prefix caching, the text is identical).
+    First request = cold: the engine has not seen this text. Repeats = warm: the optimised stack's suffix drafting finds the earlier
+    answer's phrases again and accepts longer drafts, so these run faster there. The two are reported separately, never averaged."""
+    rates = []
+    for _ in range(1 + repeats):
         _, dt, ct, _ = stream_chat(url, [{"role": "user", "content": f"[{uuid.uuid4()}] " + DECODE_PROMPT}], 400)
-        out.append((ct - 1) / dt)
-    return statistics.median(out)
+        rates.append((ct - 1) / dt)
+    return rates[0], statistics.median(rates[1:])
 
 
 def content(resp):
@@ -108,7 +112,7 @@ def cmd_run(a):
     # warm-up: first request pays one-time costs (graph capture, allocator growth) in every stack
     stream_chat(a.url, [{"role": "user", "content": "Say hello."}], 8)
     res["prefill_tok_s"], res["prefill_prompt_tokens"] = prefill(a.url)
-    res["decode_tok_s"] = decode(a.url)
+    res["decode_cold_tok_s"], res["decode_warm_tok_s"] = decode(a.url)
     r = replay(a.url, a.workload, a.calls)
     res.update({"replay_s": r["seconds"], "replay_calls": r["calls"], "replay_completion_tokens": r["completion_tokens"],
                 "replay_prompt_tokens": r["prompt_tokens"], "replay_errors": r["errors"], "answers": r["answers"], "gpu_memory_mib": gpu_memory_mib()})
@@ -116,7 +120,7 @@ def cmd_run(a):
         res.update(humaneval.run_humaneval(a.url, os.path.join(os.path.dirname(a.out), "humaneval-problems.json"), a.humaneval))
         print(f"{a.label}: HumanEval pass@1 {res['he_pass']}/{res['he_total']}, {res['he_tok_s']:.1f} tok/s")
     json.dump(res, open(a.out, "w"))
-    print(f"{a.label}: prefill {res['prefill_tok_s']:.0f} tok/s, decode {res['decode_tok_s']:.1f} tok/s, "
+    print(f"{a.label}: prefill {res['prefill_tok_s']:.0f} tok/s, decode {res['decode_cold_tok_s']:.1f} cold / {res['decode_warm_tok_s']:.1f} warm tok/s, "
           f"replay-{r['calls']} {r['seconds']:.1f} s" + (f", {len(r['errors'])} requests refused" if r["errors"] else ""))
 
 
@@ -140,7 +144,8 @@ def cmd_report(a):
         sim = (same, len(pairs), statistics.mean(difflib.SequenceMatcher(None, x, y).ratio() for x, y in pairs))
     he = fast[0].get("he_total")
     rows = [("Prefill, tokens/s (higher is better)", "prefill_tok_s", "{:,.0f}", True),
-            ("Decode, tokens/s (higher is better)", "decode_tok_s", "{:.1f}", True),
+            ("Decode, first request of a prompt (cold), tokens/s (higher is better)", "decode_cold_tok_s", "{:.1f}", True),
+            ("Decode, same prompt again (warm), tokens/s (higher is better)", "decode_warm_tok_s", "{:.1f}", True),
             (f"Replay of {fast[0]['replay_calls']} recorded requests, seconds (lower is better)", "replay_s", "{:.1f}", False),
             ("Replay output tokens in total (the stacks do not answer with the same length)", "replay_completion_tokens", "{:,.0f}", False),
             *([("HumanEval generation, tokens/s (higher is better)", "he_tok_s", "{:.1f}", True)] if he else []),

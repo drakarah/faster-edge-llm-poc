@@ -25,7 +25,7 @@ That is all. `docker compose up` builds the image, then runs three services in o
 2. **bench**: starts stock, times it, stops it, starts the optimised stack, times it, and repeats (`BENCH_ROUNDS`, default 2, so clock or thermal drift cancels). Prints a table and writes it to `data/results/`.
 3. **serve**: leaves the optimised server running at `http://localhost:8000/v1` (OpenAI-compatible) so you can try it yourself.
 
-Every step resumes from `./data`, so an interrupted run continues where it stopped.
+Every step resumes from `./data`, so an interrupted run continues where it stopped. To start only the optimised server (no benchmark) use `docker compose up --no-deps serve`: plain `docker compose up serve` starts the builder and the benchmark first. A new benchmark run moves earlier results into `data/results/previous-<time>/` instead of deleting them.
 
 ### Settings
 
