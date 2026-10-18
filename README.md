@@ -194,6 +194,20 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | `PROFILE=dgpu` (RTX 40-series etc.) | **untested**: no such machine was available when this was written; the settings come from separate runs on an RTX 4060 |
 | `MODEL=gemma4-12b`, `MODEL=qwen35-4b` | **untested** through this pipeline |
 
+### The stock arm's settings (decode probe, Orin, `gemma4-e4b`, tokens/s)
+
+Stock Edge-LLM's default speculative setting is a poor fit for this board, so the benchmark's stock arm does not use it. Same checkpoint, same engine build recipe, stock server flags only:
+
+| stock setting | decode tok/s |
+|---|---:|
+| default (one chain of 6 draft steps, verify size 7) | 19.2 |
+| `--draft-step 3 --verify-tree-size 4` | 24.0 |
+| `--draft-step 2 --verify-tree-size 3` | 25.9 |
+| no speculative decoding | 29.0 |
+| **`--draft-top-k 2 --draft-step 5 --verify-tree-size 12` (used in the benchmark)** | **32.3** |
+
+The fork's gain over stock is therefore measured against stock's best of these settings, not its default. (The first complete run below was made with stock's default; a rerun with the tuned stock arm replaces it.)
+
 ### First complete run (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, `gemma4-e4b`, 2 rounds, medians)
 
 | | stock | optimised | ratio |
