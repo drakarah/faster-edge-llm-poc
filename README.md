@@ -208,17 +208,26 @@ Stock Edge-LLM's default speculative setting is a poor fit for this board, so th
 
 The fork's gain over stock is therefore measured against stock's best of these settings, not its default. (The first complete run below was made with stock's default; a rerun with the tuned stock arm replaces it.)
 
-### First complete run (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, `gemma4-e4b`, 2 rounds, medians)
+### Result (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, `gemma4-e4b`, 2 rounds, medians; run 2026-10-18)
+
+Stock runs with its best speculative setting found (table above), the optimised stack with the fork's settings. Cold = a prompt the server has not seen; warm = the same prompt sent again.
 
 | | stock | optimised | ratio |
 |---|---:|---:|---:|
-| Prefill, tokens/s | 1,405 | 2,129 | 1.52x |
-| Decode, tokens/s (probe prompt) | 21.4 | 105.2 | 4.9x |
-| HumanEval generation, tokens/s | 27.1 | 164.5 | 6.1x |
-| HumanEval pass@1 (greedy), per round | 138/164, 138/164 | 139/164, 138/164 | same within noise |
-| Replay of 60 recorded requests, seconds | 666.5 | 109.1 | 6.1x |
-| Replay output tokens | 27,882 | 10,298 | |
+| Prefill, fresh ~1.5k-token prompt (cold), tok/s | 1,407 | 2,110 | 1.50x |
+| Same prompt again (warm, prefix reused), time to first token | 0.165 s | 0.083 s | 1.98x |
+| Decode, first request of a prompt (cold), tok/s | 31.2 | 89.8 | 2.88x |
+| Decode, same prompt again (warm), tok/s | 33.5 | 92.2 | 2.75x |
+| HumanEval generation, tok/s | 39.3 | 165.0 | 4.20x |
+| HumanEval pass@1 (greedy), per round | 138, 139 / 164 | 137, 139 / 164 | equal within noise |
+| Replay of 60 recorded calls, seconds | 510.6 | 109.4 | 4.67x |
+| Replay output tokens | 27,909 | 10,362 | 2.7x |
 
-Read the replay seconds together with the output tokens: the stock stack answers structured (JSON) requests with 2.7 times as many tokens, because it lets the model pad the JSON with long whitespace runs (51,000 whitespace characters in the stock answers against 6,000 in the optimised ones); the optimised stack caps those runs (`EDGELLM_JSON_MAX_WHITESPACE=20`). Tokens per second (decode, HumanEval) is the fair speed comparison; the replay seconds mix speed with that length difference. The stock arm also has no `gemma4` tool-call parser, so tool-call answers differ in format; only 5 of 60 greedy replay answers are identical to stock. The decode probe of the optimised stack varied between rounds (122.2 and 105.2 tok/s): it uses a short prompt and the first request after a server start; the HumanEval and replay numbers repeat to within 1%.
-
-Caveats of what is switched on in the optimised stack for this model: INT8 tensor-core prompt pass (W4A8, all projections except two on the Orin), group-scale-on-partial-sums INT4 GEMM, exact INT8 KV conversion in the decode attention. The two GEMM changes were only run on the Orin (sm_87).
+How to read it:
+* **Tokens per second is the fair speed measure, replay seconds are not.** The stock stack answers structured (JSON) requests with 2.7 times as many tokens because it lets the model pad the JSON with long whitespace runs; the optimised stack caps those runs (`EDGELLM_JSON_MAX_WHITESPACE=20`). The 4.67x replay figure mixes speed with that length difference.
+* **Decode on prose is 2.8-2.9x**, on code (HumanEval) 4.2x: structured and code output are what the suffix draft and the deeper tree help most.
+* **Cold and warm decode are close** here (stock 31 / 34, optimised 90 / 92 tok/s): repeating a prompt gains only a few percent, so the earlier single-prompt probe was not much inflated by repeats. Warm prefill is the prefix cache: both stacks reuse it, ours is 2x faster at the remainder.
+* The two stacks do not give the same greedy answers (5 of 60 identical on the replay): INT8 KV cache, W4A8 prompt pass, fused kernels, and stock has no `gemma4` tool-call parser.
+* The decode numbers of the optimised stack move by a few tok/s between rounds (88.6-91.1 cold); HumanEval and replay repeat to about 1%.
+* What is switched on in the optimised stack: see the table above (INT8 prompt GEMM with a per-op filter on the Orin, group-scale-on-partial-sums INT4 GEMM, exact INT8 KV conversion in the decode attention, plus the older changes). The two GEMM changes were only run on the Orin (sm_87).
+* Not compared yet: a third arm with the fork's engine but stock-equivalent settings (suffix draft and the other fork-only switches off), to split the gain between settings and code.
