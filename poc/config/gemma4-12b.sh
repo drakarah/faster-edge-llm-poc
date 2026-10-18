@@ -22,9 +22,9 @@ if [ "$PROFILE" = dgpu ]; then
   SERVE_ENV="$SERVE_ENV EDGELLM_EMBEDDING_ON_HOST=1 EDGELLM_SWA_PREFIX_CACHE_MB=16384"   # an 8 GB card: tables and prefix snapshots in pinned host RAM
 else
   SERVE_ENV="$SERVE_ENV EDGELLM_INT4_GEMV_MAX_M=1 EDGELLM_SWA_PREFIX_CACHE_MB=4096"        # unified memory: no host-side tricks
-  # INT8 tensor-core prompt GEMM (W4A8), the same per-op filter as the E4B config: prompt speed +15%, replay of 60 calls -8.5%, HumanEval 93.9% (off 90.9%,
-  # a single greedy run each: no visible loss). The down projection (K = 15 360) stays on the FP16 path because of the K limit.
-  SERVE_ENV="$SERVE_ENV EDGELLM_INT4_W4A8_MIN_M=64 EDGELLM_INT4_W4A8_MAX_K=8192 EDGELLM_INT4_W4A8_MIN_N=512"
+  # INT8 tensor-core prompt GEMM (W4A8): prompt speed +15%, replay of 60 calls -8.5%, HumanEval 93.9% (off 90.9%, a single greedy run each: no visible loss).
+  # Unlike the E4B config the K limit is raised to 16384 so the 12B's down projection (K = 15 360) also runs INT8: replay -4% more, HumanEval 93.3%.
+  SERVE_ENV="$SERVE_ENV EDGELLM_INT4_W4A8_MIN_M=64 EDGELLM_INT4_W4A8_MAX_K=16384 EDGELLM_INT4_W4A8_MIN_N=512"
 fi
 STOCK_ARGS="--max-input-len $MAXIN --max-kv-cache-capacity $CAP"
 STOCK_SPEC='{"method":"mtp","model":"@ASSIST@"}'
