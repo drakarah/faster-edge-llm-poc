@@ -6,7 +6,7 @@ It builds **two stacks side by side** from source, on your GPU, and times them o
 
 | | what it is |
 |---|---|
-| **stock** | [NVIDIA/TensorRT-Edge-LLM](https://github.com/NVIDIA/TensorRT-Edge-LLM) `main` at a pinned commit, used as upstream documents it: `tensorrt-edgellm-serve <checkpoint>` with MTP speculative decoding and context reuse, building its own engine |
+| **stock** | [NVIDIA/TensorRT-Edge-LLM](https://github.com/NVIDIA/TensorRT-Edge-LLM) `main` at a pinned commit, used as upstream documents it: `tensorrt-edgellm-serve <checkpoint>` with MTP speculative decoding and context reuse, building its own engine; its draft-tree flags are set to the best values we found (see below), not to its default |
 | **optimised** | the fork's `dev` branch at a pinned commit (upstream plus the optimisations: fused INT4 projections, INT8 KV cache, split-KV decode attention, tree + suffix drafting, prefix reuse for hybrid models, a faster prompt-pass GEMM and attention, ...) with engine and server settings tuned per GPU |
 
 Nothing is downloaded prebuilt except the base image and the model weights. Engines are built on your machine (a TensorRT engine only loads on the GPU and TensorRT version that built it).
@@ -52,10 +52,10 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 
 * Same weights: both stacks load the same quantised checkpoint, built once by the builder.
 * **HumanEval** (`poc/humaneval.py`, `BENCH_HUMANEVAL`): the public 164-problem code benchmark, greedy, pass@1 plus generated tokens/s, same prompts for both stacks. The problems are fetched from the Hugging Face dataset `openai/openai_humaneval` on first use. Answers are scored by running the problem's unit tests in a child python process (empty environment, 20 s and 2 GiB limits) inside the bench container, so generated code is executed there.
-* Same prompts: the three workloads in `poc/bench.py` are identical for both: a fresh ~1.5k-token prompt for **prefill** (a nonce defeats prefix caching), a free-text generation for **decode**, and a **replay** of recorded requests (`poc/data/workload.jsonl`: 396 chat requests with JSON-schema answers, recorded from an application test-suite on synthetic data; the first `BENCH_CALLS` are sent one after another).
+* Same prompts: the workloads in `poc/bench.py` are identical for both: a fresh ~1.5k-token prompt for **prefill** (a nonce defeats prefix caching) and the same prompt again for warm prefill (time to first token), a free-text generation for **decode** (first request = cold, same prompt again = warm, reported separately, never averaged), and a **replay** of recorded requests (`poc/data/workload.jsonl`: 396 chat requests with JSON-schema answers, recorded from an application test-suite on synthetic data; the first `BENCH_CALLS` are sent one after another).
 * Same client: timings are taken from the HTTP client, the same way for both servers; greedy decoding.
 * Alternating order, medians over rounds; the first request after a start is a warm-up.
-* Stock gets its own best documented settings (MTP, context reuse where upstream supports it), not a crippled configuration. If the stock stack cannot run a model on your GPU (for example out of memory) the table says so.
+* Stock gets its own best settings, not a crippled configuration: MTP with context reuse, and the draft-tree flags (`--draft-top-k 2 --draft-step 5 --verify-tree-size 12`) that beat its default by 68% on this board (table under Status); its input limit is the full context because it has no chunked prompt pass; auto tool choice is on so it accepts the same requests. Differences that remain are fork features, not settings: suffix drafting, the sparse drafter head, kernel changes, INT8 KV cache. If the stock stack cannot run a model on your GPU (for example out of memory) the table says so.
 * Answers are not forced to be identical: the optimised stack also quantises the KV cache to INT8, which can change wording. The report prints how many greedy answers match and how similar they are, and `data/results/*.json` holds every answer so you can read them.
 
 ## What the optimised build changes compared with stock NVIDIA TensorRT-Edge-LLM
@@ -180,7 +180,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 
 ## Status
 
-**First end-to-end run done on the Orin only.** What has been checked and what has not:
+**End-to-end run done on the Orin for `gemma4-e4b` only.** Results are at the end of this file. What has been checked and what has not:
 
 | | state |
 |---|---|
@@ -188,11 +188,11 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | Fork changes the comparison rests on (measured separately on the Orin, kernel level and replay level) | e.g. the exact INT8 KV conversion in the decode attention: replay of 60 recorded requests 121.4 s to 116.75 s, decode +3.5%, bit-exact |
 | INT8 tensor-core prompt pass (W4A8) for `gemma4-e4b` (prompts of 64+ tokens) | on: Orin runs it on all projections except the two with outlier inputs (per-layer-embedding gate, down projection); measured prompt speed +10-12% and HumanEval 89.0% vs 88.4% (W4A16), but on structured-output requests it leans to slightly longer answers (about +3% output tokens, paired replay). The discrete-GPU profile runs it on every projection and has **not** been checked: the kernel was only run on sm_87 |
 | INT4 decode GEMM with the group scale applied to FP32 partial sums (fewer instructions per tensor op) | on in the optimised build: kernel 6-21% faster at the decode batch size, whole-replay effect flat within noise; only run on sm_87 |
-| Builder (export, engine build) -> bench -> serve through `docker compose up` on the Orin, `MODEL=gemma4-e4b` | **done end to end** (one run, 2026-10-18: engines built inside the containers, 2 benchmark rounds, optimised server started) |
+| Builder (export, engine build) -> bench -> serve through `docker compose up` on the Orin, `MODEL=gemma4-e4b` | **done end to end** (2026-10-18: engines built inside the containers in about 8 minutes each, 2 benchmark rounds in about 1.5 h, results below) |
 | Quantisation from scratch inside the builder (`gptq`, needs `HF_TOKEN`) | the run used the checkpoint prepared by the same tools beforehand; the from-scratch path has not been run through the container |
 | The stock stack loading our quantised checkpoint (`gemma4_text`, MTP assistant) and building its own engine | **works** (builds in about 8 minutes, input limit set to the full context because the stock engine has no chunked prompt pass) |
 | `PROFILE=dgpu` (RTX 40-series etc.) | **untested**: no such machine was available when this was written; the settings come from separate runs on an RTX 4060 |
-| `MODEL=gemma4-12b`, `MODEL=qwen35-4b` | **untested** through this pipeline |
+| `MODEL=gemma4-12b`, `MODEL=qwen35-4b` | **untested** through this pipeline; their stock arms still use stock's default draft settings, input limit and tool flags from before the fixes made for the E4B (`poc/config/*.sh`) and need the same review |
 
 ### The stock arm's settings (decode probe, Orin, `gemma4-e4b`, tokens/s)
 
@@ -206,7 +206,7 @@ Stock Edge-LLM's default speculative setting is a poor fit for this board, so th
 | no speculative decoding | 29.0 |
 | **`--draft-top-k 2 --draft-step 5 --verify-tree-size 12` (used in the benchmark)** | **32.3** |
 
-The fork's gain over stock is therefore measured against stock's best of these settings, not its default. (The first complete run below was made with stock's default; a rerun with the tuned stock arm replaces it.)
+The fork's gain over stock is therefore measured against stock's best of these settings, not its default. (An earlier run against stock's default setting showed 6x on replay and decode; that overstated the gain and is replaced by the results below.)
 
 ### Result (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, `gemma4-e4b`, 2 rounds, medians; run 2026-10-18)
 
