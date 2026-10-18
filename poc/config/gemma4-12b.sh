@@ -26,5 +26,10 @@ else
   # Unlike the E4B config the K limit is raised to 16384 so the 12B's down projection (K = 15 360) also runs INT8: replay -4% more, HumanEval 93.3%.
   SERVE_ENV="$SERVE_ENV EDGELLM_INT4_W4A8_MIN_M=64 EDGELLM_INT4_W4A8_MAX_K=16384 EDGELLM_INT4_W4A8_MIN_N=512"
 fi
-STOCK_ARGS="--max-input-len $MAXIN --max-kv-cache-capacity $CAP"
+# Stock arm: same drafting tree as the optimised arm (its best setting, not its default chain) and its own prefix reuse. Upstream has no chunked prompt
+# pass, so the engine takes a whole prompt: the input limit and the KV capacity are the full context the replay needs (12288), not the 32768 of the
+# optimised engine (stock has no bounded sliding-window KV, so a 32768 fp16 pool would cost ~11 GB for nothing here).
+STOCK_TREE="--draft-top-k 6 --draft-step 3 --verify-tree-size 20"
+[ "$PROFILE" = orin ] && STOCK_TREE="--draft-top-k 5 --draft-step 3 --verify-tree-size 16"
+STOCK_ARGS="--max-input-len 12288 --max-kv-cache-capacity 12288 --enable-context-reuse --enable-auto-tool-choice $STOCK_TREE"
 STOCK_SPEC='{"method":"mtp","model":"@ASSIST@"}'
