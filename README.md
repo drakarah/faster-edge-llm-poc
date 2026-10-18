@@ -64,7 +64,7 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 
 ### Whole journey on the engine level (Jetson AGX Orin 32 GB, Gemma 4 E4B)
 
-The end-to-end stock-versus-optimised numbers of this benchmark are in the results above. The stepwise ladder behind them was measured on the engine level with a Dutch-prose decode probe (400 tokens, greedy) and the 396-request replay. Rows are cumulative; the starting point is Edge-LLM v0.11.0 with the same INT4 weights, no speculative decoding.
+The end-to-end stock-versus-optimised numbers of this benchmark are in the results at the end of this file. The stepwise ladder behind them was measured on the engine level with a Dutch-prose decode probe (400 tokens, greedy) and the 396-request replay. Rows are cumulative; the starting point is Edge-LLM v0.11.0 with the same INT4 weights, no speculative decoding.
 
 | stage | decode tok/s | prefill tok/s (5.2k prompt) | GPU memory (nvmap) |
 |---|---:|---:|---:|
