@@ -64,21 +64,24 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 
 ### Whole journey on the engine level (Jetson AGX Orin 32 GB, Gemma 4 E4B)
 
-The end-to-end stock-versus-optimised numbers of this benchmark are in the results at the end of this file. The stepwise ladder behind them was measured on the engine level with a Dutch-prose decode probe (400 tokens, greedy, suffix draft off) and the 396-request replay. Rows are cumulative; the starting point is Edge-LLM v0.11.0 with the same INT4 weights, no speculative decoding. The last row is the engine this benchmark builds.
+The end-to-end stock-versus-optimised numbers of this benchmark are in the results at the end of this file. The stepwise ladder behind them was measured on the engine level, one change at a time, with a Dutch-prose decode probe (400 tokens, greedy) and the 396-request replay. Rows are cumulative; the starting point is Edge-LLM v0.11.0 with the same INT4 weights, no speculative decoding. The last row is the engine this benchmark builds.
 
-| stage | decode tok/s | prefill tok/s (5.2k prompt) | GPU memory (nvmap) | replay-396 |
-|---|---:|---:|---:|---:|
-| llama.cpp Q4_K_M reference | 21.0 | 842 | 6.0 GB | |
-| Edge-LLM v0.11.0, INT4 weights + INT4 head, fp16 embedding tables | 43.8 | 1,834 | 10.4 GB | |
-| + MTP tree drafting with the GEMV/GEMM threshold fix | 56.5 | | 11.1 GB | |
-| + INT8 embedding tables | 56.3 | | 7.78 GB | |
-| + fused q/k/v and gate/up (with a reduced output vocabulary that was later rejected) | 63.4 | | | |
-| engine of the final design at that time (full vocabulary, GPTQ INT4 head, INT8 KV cache, split-KV attention, chunked prefill 2048, 320-page pool) | 57.2 | 1,833 | 7.44 GB | 846 s → 628 s |
-| + centroid head, sparse draft logits (probe); suffix draft on top | 61.2 | 1,830-1,840 | 7.43 GB | 545 s (own session) |
-| served-equivalent engine re-measured in the session of the next row (exact INT8 attention conversion included) | 62.9 | 1,814 | 7.43 GB | 508.5 s |
-| **this benchmark's engine: + W4A8 prompt GEMM with per-op filter, + group-scale decode GEMM** | **64-66** | **1,980-2,008** | **7.44 GB** | **482.9 s** |
+Two decode columns, never to be mixed up. **Drafter only** is the probe with the suffix draft switched off: it exists for every stage, because the suffix draft was only added on 2026-10-14 (after the first rows were measured), and it isolates the engine and the MTP drafter. **As served** is what the engine does with the suffix draft on, measured *cold*: different prompts, one request each, a fresh server (never the same prompt repeated, which lets the suffix cache copy the earlier answer and reads 150-200 tok/s). The as-served column can only be filled for the engines still on disk.
 
-The replay-396 time went from 846 s (first recording, before the host-side fixes and tuned tree) to 677 s (host-side fixes), 628 s (tuned tree and larger prefix pool; 651 s with the default grammar cache), 630 s (XGrammar upgrade with the default cache) and, in a like-for-like pair, 619 -> 545 s with the suffix draft. The last two rows are from a later session on the same recording and the same server settings (suffix draft on for the replay): 508.5 -> 482.9 s, of which the W4A8 prompt GEMM is 4.3% and the group-scale GEMM about 0.7% (flat). The sessions differ by a few percent, so compare within a session. The decode column is a probe and is not strictly comparable between stages (the 63.4 row used a reduced output vocabulary that failed the quality gate); the decode probe is nearly unchanged in the last stage (62.9 -> 64-66): the gains of the last stage are in the prompt pass and the replay, not in single-stream decode. Memory is unchanged to within 10 MB: W4A8 needs a small scratch buffer only.
+| stage | decode, drafter only (tok/s) | decode, as served, cold (tok/s) | prefill (tok/s, 5.2k prompt) | GPU memory (nvmap) | replay-396 |
+|---|---:|---:|---:|---:|---:|
+| llama.cpp Q4_K_M reference | 21.0 | n/a | 842 | 6.0 GB | |
+| Edge-LLM v0.11.0, INT4 weights + INT4 head, fp16 embedding tables | 43.8 | n/a | 1,834 | 10.4 GB | |
+| + MTP tree drafting with the GEMV/GEMM threshold fix | 56.5 | n/a | | 11.1 GB | |
+| + INT8 embedding tables | 56.3 | n/a | | 7.78 GB | |
+| + fused q/k/v and gate/up (with a reduced output vocabulary that was later rejected) | 63.4 | n/a | | | |
+| engine of the final design at that time (full vocabulary, GPTQ INT4 head, INT8 KV cache, split-KV attention, chunked prefill 2048, 320-page pool) | 57.2 | n/a | 1,833 | 7.44 GB | 846 s, 628 s after tree and pool tuning |
+| + centroid head, sparse draft logits | 61.2 | n/a | 1,830-1,840 | 7.43 GB | 619 s |
+| + suffix draft (served image, 2026-10-14) | not re-measured | not measured on that image | 1,830-1,840 | 7.43 GB | 545 s (same session as the 619 s: -11.9%) |
+| served-equivalent engine, re-measured in the session of the next row (adds the exact INT8 attention conversion) | 62.9 | Dutch 65.5, 61.5, 60.5; English 83.1 | 1,814 | 7.43 GB | 508.5 s |
+| **this benchmark's engine: + W4A8 prompt GEMM with per-op filter, + group-scale decode GEMM** | **64-66** | **Dutch 69.7, 66.7, 64.2; English 91.7** | **1,980-2,008** | **7.44 GB** | **482.9 s** |
+
+Reading the last two rows (same session, same server settings, suffix draft on for the replay): the benchmark's engine decodes 6-10% faster cold, prefills 9-11% faster, and replays the 396 calls 5.0% faster (W4A8 prompt GEMM 4.3%, group-scale GEMM about 0.7%). Cold decode on Dutch prose with the suffix draft on is about the same as drafter-only (it has nothing to copy yet); the suffix draft earns its gain on structured and repetitive output (replay -11.9%, code, JSON), not on the first essay. English prose decodes faster than Dutch (the drafter accepts more tokens). The sessions of the 545 s and 508.5 s rows differ by a few percent, so compare within a session. The 63.4 row used a reduced output vocabulary that failed the quality gate. Memory is unchanged to within 10 MB: W4A8 needs a small scratch buffer only.
 
 ### Changes
 
