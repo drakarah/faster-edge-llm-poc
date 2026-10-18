@@ -64,19 +64,21 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 
 ### Whole journey on the engine level (Jetson AGX Orin 32 GB, Gemma 4 E4B)
 
-The end-to-end stock-versus-optimised numbers of this benchmark are in the results at the end of this file. The stepwise ladder behind them was measured on the engine level with a Dutch-prose decode probe (400 tokens, greedy) and the 396-request replay. Rows are cumulative; the starting point is Edge-LLM v0.11.0 with the same INT4 weights, no speculative decoding.
+The end-to-end stock-versus-optimised numbers of this benchmark are in the results at the end of this file. The stepwise ladder behind them was measured on the engine level with a Dutch-prose decode probe (400 tokens, greedy, suffix draft off) and the 396-request replay. Rows are cumulative; the starting point is Edge-LLM v0.11.0 with the same INT4 weights, no speculative decoding. The last row is the engine this benchmark builds.
 
-| stage | decode tok/s | prefill tok/s (5.2k prompt) | GPU memory (nvmap) |
-|---|---:|---:|---:|
-| llama.cpp Q4_K_M reference | 21.0 | 842 | 6.0 GB |
-| Edge-LLM v0.11.0, INT4 weights + INT4 head, fp16 embedding tables | 43.8 | 1,834 | 10.4 GB |
-| + MTP tree drafting with the GEMV/GEMM threshold fix | 56.5 | | 11.1 GB |
-| + INT8 embedding tables | 56.3 | | 7.78 GB |
-| + fused q/k/v and gate/up (with a reduced output vocabulary that was later rejected) | 63.4 | | |
-| engine of the final design (full vocabulary, GPTQ INT4 head, INT8 KV cache, split-KV attention, chunked prefill 2048, 320-page pool) | 57.2 | 1,833 | 7.44 GB |
-| + centroid head, sparse draft logits (probe); suffix draft on top (replay-396 545 s) | 61.2 | 1,830-1,840 | 7.43 GB |
+| stage | decode tok/s | prefill tok/s (5.2k prompt) | GPU memory (nvmap) | replay-396 |
+|---|---:|---:|---:|---:|
+| llama.cpp Q4_K_M reference | 21.0 | 842 | 6.0 GB | |
+| Edge-LLM v0.11.0, INT4 weights + INT4 head, fp16 embedding tables | 43.8 | 1,834 | 10.4 GB | |
+| + MTP tree drafting with the GEMV/GEMM threshold fix | 56.5 | | 11.1 GB | |
+| + INT8 embedding tables | 56.3 | | 7.78 GB | |
+| + fused q/k/v and gate/up (with a reduced output vocabulary that was later rejected) | 63.4 | | | |
+| engine of the final design at that time (full vocabulary, GPTQ INT4 head, INT8 KV cache, split-KV attention, chunked prefill 2048, 320-page pool) | 57.2 | 1,833 | 7.44 GB | 846 s → 628 s |
+| + centroid head, sparse draft logits (probe); suffix draft on top | 61.2 | 1,830-1,840 | 7.43 GB | 545 s (own session) |
+| served-equivalent engine re-measured in the session of the next row (exact INT8 attention conversion included) | 62.9 | 1,814 | 7.43 GB | 508.5 s |
+| **this benchmark's engine: + W4A8 prompt GEMM with per-op filter, + group-scale decode GEMM** | **64-66** | **1,980-2,008** | **7.44 GB** | **482.9 s** |
 
-The replay-396 time went from 846 s (first recording, before the host-side fixes and tuned tree) to 677 s (host-side fixes), 628 s (tuned tree and larger prefix pool; 651 s with the default grammar cache), 630 s (XGrammar upgrade with the default cache) and, in a like-for-like pair, 619 -> 545 s with the suffix draft. The decode column is not strictly comparable between stages (the 63.4 row used a reduced output vocabulary that failed the quality gate; the last row's decode figure is a prose probe measured before the suffix draft, which makes a repeated-prompt probe meaningless). Later single changes (exact INT8 conversion in attention, W4A8 prompt GEMM, group-flush GEMM) are in the table below.
+The replay-396 time went from 846 s (first recording, before the host-side fixes and tuned tree) to 677 s (host-side fixes), 628 s (tuned tree and larger prefix pool; 651 s with the default grammar cache), 630 s (XGrammar upgrade with the default cache) and, in a like-for-like pair, 619 -> 545 s with the suffix draft. The last two rows are from a later session on the same recording and the same server settings (suffix draft on for the replay): 508.5 -> 482.9 s, of which the W4A8 prompt GEMM is 4.3% and the group-scale GEMM about 0.7% (flat). The sessions differ by a few percent, so compare within a session. The decode column is a probe and is not strictly comparable between stages (the 63.4 row used a reduced output vocabulary that failed the quality gate); the decode probe is nearly unchanged in the last stage (62.9 -> 64-66): the gains of the last stage are in the prompt pass and the replay, not in single-stream decode. Memory is unchanged to within 10 MB: W4A8 needs a small scratch buffer only.
 
 ### Changes
 
