@@ -5,7 +5,8 @@
   bench.py report --results DIR --model M --profile P              aggregate the rounds into a table (stock vs optimised)
 
 Workloads (all greedy, temperature 0):
-  prefill  a fresh ~1.5k-token prompt (a unique nonce defeats prefix caching); prompt tokens / time to first token
+  prefill  a fresh ~1.5k-token prompt (a unique nonce defeats prefix caching); prompt tokens / time to first token (cold), and
+           the time to first token of the same prompt sent again (warm, prefix reused)
   decode   a long free-text generation; completion tokens after the first / time between first and last token; reported cold (first
            request) and warm (same prompt again) separately
   humaneval  optional (--humaneval N): the public HumanEval benchmark, pass@1 and generation tokens/s (poc/humaneval.py)
@@ -49,12 +50,17 @@ def stream_chat(url, messages, max_tokens):
 
 
 def prefill(url, runs=3):
-    out = []
+    """Cold: a fresh ~1.5k-token prompt (unique nonce, nothing to reuse), prompt tokens / time to first token, median of runs.
+    Warm: the identical prompt sent again right after; both stacks run with prefix reuse, so only the new tokens are computed.
+    Reported as time to first token (the prompt-token rate would divide by tokens that were never computed)."""
+    cold, warm = [], []
     for _ in range(runs):
         text = f"[{uuid.uuid4()}] " + "".join(FILLER.format(n=i) for i in range(1, 46)) + "\nSummarise in one word."
-        ttft, _, _, pt = stream_chat(url, [{"role": "user", "content": text}], 1)
-        out.append(pt / ttft)
-    return statistics.median(out), pt
+        msgs = [{"role": "user", "content": text}]
+        ttft, _, _, pt = stream_chat(url, msgs, 1)
+        cold.append(pt / ttft)
+        warm.append(stream_chat(url, msgs, 1)[0])
+    return statistics.median(cold), pt, statistics.median(warm)
 
 
 def decode(url, repeats=2):
@@ -111,7 +117,7 @@ def cmd_run(a):
     res = {"label": a.label, "url": a.url}
     # warm-up: first request pays one-time costs (graph capture, allocator growth) in every stack
     stream_chat(a.url, [{"role": "user", "content": "Say hello."}], 8)
-    res["prefill_tok_s"], res["prefill_prompt_tokens"] = prefill(a.url)
+    res["prefill_tok_s"], res["prefill_prompt_tokens"], res["prefill_warm_ttft_s"] = prefill(a.url)
     res["decode_cold_tok_s"], res["decode_warm_tok_s"] = decode(a.url)
     r = replay(a.url, a.workload, a.calls)
     res.update({"replay_s": r["seconds"], "replay_calls": r["calls"], "replay_completion_tokens": r["completion_tokens"],
@@ -120,7 +126,7 @@ def cmd_run(a):
         res.update(humaneval.run_humaneval(a.url, os.path.join(os.path.dirname(a.out), "humaneval-problems.json"), a.humaneval))
         print(f"{a.label}: HumanEval pass@1 {res['he_pass']}/{res['he_total']}, {res['he_tok_s']:.1f} tok/s")
     json.dump(res, open(a.out, "w"))
-    print(f"{a.label}: prefill {res['prefill_tok_s']:.0f} tok/s, decode {res['decode_cold_tok_s']:.1f} cold / {res['decode_warm_tok_s']:.1f} warm tok/s, "
+    print(f"{a.label}: prefill {res['prefill_tok_s']:.0f} tok/s cold / warm TTFT {res['prefill_warm_ttft_s']*1000:.0f} ms, decode {res['decode_cold_tok_s']:.1f} cold / {res['decode_warm_tok_s']:.1f} warm tok/s, "
           f"replay-{r['calls']} {r['seconds']:.1f} s" + (f", {len(r['errors'])} requests refused" if r["errors"] else ""))
 
 
@@ -143,7 +149,8 @@ def cmd_report(a):
         same = sum(x == y for x, y in pairs)
         sim = (same, len(pairs), statistics.mean(difflib.SequenceMatcher(None, x, y).ratio() for x, y in pairs))
     he = fast[0].get("he_total")
-    rows = [("Prefill, tokens/s (higher is better)", "prefill_tok_s", "{:,.0f}", True),
+    rows = [("Prefill of a fresh ~1.5k-token prompt (cold), tokens/s (higher is better)", "prefill_tok_s", "{:,.0f}", True),
+            ("Same prompt again (warm, prefix reused), time to first token, seconds (lower is better)", "prefill_warm_ttft_s", "{:.3f}", False),
             ("Decode, first request of a prompt (cold), tokens/s (higher is better)", "decode_cold_tok_s", "{:.1f}", True),
             ("Decode, same prompt again (warm), tokens/s (higher is better)", "decode_warm_tok_s", "{:.1f}", True),
             (f"Replay of {fast[0]['replay_calls']} recorded requests, seconds (lower is better)", "replay_s", "{:.1f}", False),
