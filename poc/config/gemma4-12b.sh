@@ -29,7 +29,9 @@ fi
 # Stock arm: same drafting tree as the optimised arm (its best setting, not its default chain) and its own prefix reuse. Upstream has no chunked prompt
 # pass, so the engine takes a whole prompt: the input limit and the KV capacity are the full context the replay needs (12288), not the 32768 of the
 # optimised engine (stock has no bounded sliding-window KV, so a 32768 fp16 pool would cost ~11 GB for nothing here).
-STOCK_TREE="--draft-top-k 6 --draft-step 3 --verify-tree-size 20"
-[ "$PROFILE" = orin ] && STOCK_TREE="--draft-top-k 5 --draft-step 3 --verify-tree-size 16"
-STOCK_ARGS="--max-input-len 12288 --max-kv-cache-capacity 12288 --enable-context-reuse --enable-auto-tool-choice $STOCK_TREE"
+# --verify-tree-size is only the tree used at run time; the engine is built for --max-verify-tree-size / --max-draft-tree-size (default 60) and its INT4 GEMM
+# is tuned for that size, so stock gets the same engine maximum as the optimised build ($TREE): otherwise it would run 16 rows in 64-row tiles.
+STOCK_VERIFY=20; STOCK_TREE="--draft-top-k 6 --draft-step 3 --verify-tree-size 20"
+[ "$PROFILE" = orin ] && { STOCK_VERIFY=16; STOCK_TREE="--draft-top-k 5 --draft-step 3 --verify-tree-size 16"; }
+STOCK_ARGS="--max-input-len 12288 --max-kv-cache-capacity 12288 --enable-context-reuse --enable-auto-tool-choice $STOCK_TREE --max-verify-tree-size $STOCK_VERIFY --max-draft-tree-size $STOCK_VERIFY"
 STOCK_SPEC='{"method":"mtp","model":"@ASSIST@"}'
