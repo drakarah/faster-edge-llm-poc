@@ -124,6 +124,9 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | Prefix reuse with a sized KV pool (`--enable-context-reuse`, `--maxKVPoolPages 320`) | default pool holds one request, so reuse never hit; a larger pool keeps earlier prefixes | reuse 0 of 25 requests -> 106 of 164 (240 pages); 12 re-run tests 223 -> 165 s (-26%); 320 pages: reused prompt tokens 72.7% -> 75.9%. (Stock also accepts the flag; its hit rate with its default pool was not measured in this benchmark) | GPU 7.14 -> 7.44 GB for 320 pages (pool 1,120 MiB) | yes | [`dev`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/dev) |
 | Bounded sliding-window KV with INT8 KV and tree speculative decoding (`EDGELLM_GEMMA4_BOUNDED_KV_SPEC=1`, `_BOUNDED_KV_QUANT=1`; plus a fix for garbage output on prompts longer than the engine input length) | sliding layers keep a ring of the last 1,152 positions instead of the full capacity | no per-step speed cost (63.4 vs 63.4, 71.2 vs 73.0, 55.8 vs 55.9 tok/s on three prompts). Disables ordinary prefix reuse (see next row). **For the E4B on Orin it saves only about 190 MiB at 10k capacity** (about 1.35 GB at 70k, estimated from the model config) | RTX 4060, 12B: capacity 8,192 in 7,347 MiB (the full layout did not load at 6,144), 32,768 in 7,647 MiB | no (E4B on Orin; mainly helps the 12B on 8 GB) | [`rtx4060/gemma4-bounded-kv-spec`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/rtx4060/gemma4-bounded-kv-spec) ([5c2f632](https://github.com/drakarah/TensorRT-Edge-LLM/commit/5c2f632), [3203e24](https://github.com/drakarah/TensorRT-Edge-LLM/commit/3203e24), [df5c581](https://github.com/drakarah/TensorRT-Edge-LLM/commit/df5c581)) |
 | Host-resident prefix cache for bounded sliding-window KV (`EDGELLM_SWA_PREFIX_CACHE_MB`) | snapshots KV into pinned host memory so bounded engines get prefix reuse | RTX 4060, 12B: replay-396 1,667.8 -> 1,191.3 s (-28.6%); repeated 4.7k-token prompt 2.67 -> 0.46 s; 296 of 396 answers byte-identical | no VRAM; host memory up to the configured budget | no (needs bounded engine) | [`rtx4060/gemma4-bounded-prefix-cache`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/rtx4060/gemma4-bounded-prefix-cache) ([b5363a2](https://github.com/drakarah/TensorRT-Edge-LLM/commit/b5363a2)) |
+| Verify size that fits the INT4 GEMM tile ladder (`--verify-tree-size 16` instead of 20 for the 12B on Orin) | the GEMM runs in 16-row tiles and is tuned once at the engine's largest verify size; 20 rows pad to a 32-row tile (37.5% idle) | Orin, 12B: decode round 72.8 -> 60.7 ms, -16% per output token for 3.5% fewer tokens per round; HumanEval unchanged | none | yes (12B, Orin) | settings only (`poc/config/gemma4-12b.sh`) |
+| GELU(gate) * up fusion plugin (`EDGELLM_GEMMA4_GELU_PLUGIN=1`) | one kernel instead of TensorRT's generated chain (cast, split, gelu, mul, clip, cast), 16-byte accesses, exp2-form tanh | Orin: 12B prompt passes -9%, decode round -2.4%; E4B prompt passes -11%, prefill +11%, decode round -2.9%. Output within one fp16 ulp of the FP32 reference | none | yes (12B) | [`perf/gelu-mul-plugin`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/perf/gelu-mul-plugin) |
+| Drop identity activation permutations at export (no-op Gather in front of every INT4 GEMM) | the exporter emitted `index_select` with an arange for GPTQ checkpoints without act-order; 201 Gathers in the 12B graph | included in the plugin branch's numbers above (the Gather alone moved fusion boundaries and was net zero) | none | yes (12B) | [`perf/gelu-mul-plugin`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/perf/gelu-mul-plugin) |
 | **Runtime and host** | | | | | |
 | Chunked prefill (`--maxInputLen 2048`; strategies opt in) | prompts longer than the engine's input length run in several passes appended to the KV cache. Stock needs an input limit equal to the full context | prefill 1,683 -> 1,704 tok/s (unchanged); decode unchanged | activations 899 -> 225 MB; GPU 8.07 -> 7.14 GB | yes | [`feat/chunked-prefill`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/feat/chunked-prefill) ([fe561b9](https://github.com/drakarah/TensorRT-Edge-LLM/commit/fe561b9)) |
 | TensorRT binding cache | re-sets only the bindings that changed between steps (was about 270 per round) | verify launch 3.5 -> 1.1 ms after round start; replay-30 82.5 -> 80.0 s (-3.5%); with the tree-selection change prose decode at 7.2k context 56.7 -> 62.2 tok/s | none | yes | [`perf/executor-binding-cache`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/perf/executor-binding-cache) ([a99a2e1](https://github.com/drakarah/TensorRT-Edge-LLM/commit/a99a2e1)) |
@@ -185,7 +188,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 
 ## Status
 
-**End-to-end run done on the Orin for `gemma4-e4b` only.** Results are at the end of this file. What has been checked and what has not:
+**End-to-end runs done on the Orin for `gemma4-e4b` and `gemma4-12b`.** Results are at the end of this file. What has been checked and what has not:
 
 | | state |
 |---|---|
@@ -197,7 +200,8 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | Quantisation from scratch inside the builder (`gptq`, needs `HF_TOKEN`) | the run used the checkpoint prepared by the same tools beforehand; the from-scratch path has not been run through the container |
 | The stock stack loading our quantised checkpoint (`gemma4_text`, MTP assistant) and building its own engine | **works** (builds in about 8 minutes, input limit set to the full context because the stock engine has no chunked prompt pass) |
 | `PROFILE=dgpu` (RTX 40-series etc.) | **untested**: no such machine was available when this was written; the settings come from separate runs on an RTX 4060 |
-| `MODEL=gemma4-12b`, `MODEL=qwen35-4b` | **untested** through this pipeline; their stock arms still use stock's default draft settings, input limit and tool flags from before the fixes made for the E4B (`poc/config/*.sh`) and need the same review |
+| Builder -> bench -> serve through `docker compose up` on the Orin, `MODEL=gemma4-12b` | **done end to end** (2026-10-19: Orin profile with verify tree 16, W4A8 prompt pass with `MAX_K=16384`, GELU fusion plugin; 2 rounds, results below). The stock arm uses the same tree (5 x 3, verify 16), its own prefix reuse, and the whole prompt as input limit; stock's own speculative settings were not swept for the 12B |
+| `MODEL=qwen35-4b` | **untested** through this pipeline; its stock arm still uses stock's default draft settings, input limit and tool flags from before the fixes made for the E4B (`poc/config/*.sh`) and needs the same review |
 
 ### The stock arm's settings (decode probe, Orin, `gemma4-e4b`, tokens/s)
 
@@ -236,3 +240,25 @@ How to read it:
 * The decode numbers of the optimised stack move by a few tok/s between rounds (88.6-91.1 cold); HumanEval and replay repeat to about 1%.
 * What is switched on in the optimised stack: see the table above (INT8 prompt GEMM with a per-op filter on the Orin, group-scale-on-partial-sums INT4 GEMM, exact INT8 KV conversion in the decode attention, plus the older changes). The two GEMM changes were only run on the Orin (sm_87).
 * Not compared yet: a third arm with the fork's engine but stock-equivalent settings (suffix draft and the other fork-only switches off), to split the gain between settings and code.
+
+### Result, `gemma4-12b` (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, 2 rounds, medians; run 2026-10-19)
+
+Both stacks use the same checkpoint (INT4 weights, the 12B MTP assistant) and the same drafting tree (5 x 3, verify size 16). The optimised stack adds what the changes table lists for the 12B (INT8 KV, bounded sliding-window KV with a 4 GiB host prefix cache, W4A8 prompt pass, GELU fusion plugin, suffix draft). The target is an 8 GB card; the Orin has 32 GB, so this is evidence for speed and answer quality, not for the memory fit.
+
+| | stock | optimised | ratio |
+|---|---:|---:|---:|
+| Prefill, fresh ~1.5k-token prompt (cold), tok/s | 739 | 911 | 1.23x |
+| Same prompt again (warm, prefix reused), time to first token | 0.275 s | 0.437 s | **0.63x (optimised is slower)** |
+| Decode, first request of a prompt (cold), tok/s | 27.4 | 34.1 | 1.25x |
+| Decode, same prompt again (warm), tok/s | 27.2 | 40.0 | 1.47x |
+| HumanEval generation, tok/s | 35.7 | 58.4 | 1.64x |
+| HumanEval pass@1 (greedy), per round | 153, 152 / 164 | 154, 153 / 164 | equal within noise |
+| Replay of 60 recorded calls, seconds | 561.8 | 310.3 | 1.81x |
+| Replay output tokens | 10,094 | 9,979 | |
+
+How to read it:
+* **The gain is smaller than on the E4B** (decode 1.25-1.47x against 2.9x, HumanEval generation 1.64x against 4.2x). The 12B decode round is dominated by the INT4 weight reads (about 85% of the memory roofline after the tile fix), so there is less left for drafting and kernel work to win; and this comparison gives stock the same drafting tree, which the E4B comparison did not.
+* **Warm prefill is slower than stock's.** The optimised stack restores a snapshot from pinned host memory (bounded sliding-window KV needs it to reuse anything), stock keeps the prefix in GPU pages. It pays off on long shared prefixes and hurts on a 1.5k-token one; a smaller snapshot cost is open work.
+* The replay seconds are close to a fair measure here (output lengths within 1.2%).
+* The two stacks give the same answers on only 2 of 60 replay calls (mean text similarity 0.60): INT8 KV, W4A8 prompt pass, fused kernels. HumanEval is the quality check.
+* The optimised stack's HumanEval generation speed here (58 tok/s) is lower than in separate runs on the development setup (about 70 tok/s); not yet explained.
