@@ -48,16 +48,6 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 * Free disk: about 60 GB (gemma4-e4b) to 120 GB (gemma4-12b), including the 25 GB base image.
 * Time on first run (AGX Orin): image build about 1-2 h, E4B quantisation and engines a few hours, the benchmark about 20 min. Later runs only repeat the benchmark.
 
-## How the comparison is made fair
-
-* Same weights: both stacks load the same quantised checkpoint, built once by the builder.
-* **HumanEval** (`poc/humaneval.py`, `BENCH_HUMANEVAL`): the public 164-problem code benchmark, greedy, pass@1 plus generated tokens/s, same prompts for both stacks. The problems are fetched from the Hugging Face dataset `openai/openai_humaneval` on first use. Answers are scored by running the problem's unit tests in a child python process (empty environment, 20 s and 2 GiB limits) inside the bench container, so generated code is executed there.
-* Same prompts: the workloads in `poc/bench.py` are identical for both: a fresh ~1.5k-token prompt for **prefill** (a nonce defeats prefix caching) and the same prompt again for warm prefill (time to first token), a free-text generation for **decode** (first request = cold, same prompt again = warm, reported separately, never averaged), and a **replay** of recorded requests (`poc/data/workload.jsonl`: 396 chat requests with JSON-schema answers, recorded from an application test-suite on synthetic data; the first `BENCH_CALLS` are sent one after another).
-* Same client: timings are taken from the HTTP client, the same way for both servers; greedy decoding.
-* Alternating order, medians over rounds; the first request after a start is a warm-up.
-* Stock gets its own best settings, not a crippled configuration: MTP with context reuse, and the draft-tree flags (`--draft-top-k 2 --draft-step 5 --verify-tree-size 12`) that beat its default by 68% on this board (table under Status); its input limit is the full context because it has no chunked prompt pass; auto tool choice is on so it accepts the same requests. Differences that remain are fork features, not settings: suffix drafting, the sparse drafter head, kernel changes, INT8 KV cache. If the stock stack cannot run a model on your GPU (for example out of memory) the table says so.
-* Answers are not forced to be identical: the optimised stack also quantises the KV cache to INT8, which can change wording. The report prints how many greedy answers match and how similar they are, and `data/results/*.json` holds every answer so you can read them.
-
 ## What the optimised build changes compared with stock NVIDIA TensorRT-Edge-LLM
 
 "Stock" is NVIDIA/TensorRT-Edge-LLM `main`; "optimised" is the `dev` branch of the fork ([`dev`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/dev)), which is upstream plus the changes below. Every change is listed with what was measured. Unless a row says otherwise, numbers are from a Jetson AGX Orin 32 GB (14 SMs, MAXN, GPU pinned at 930 MHz), Gemma 4 E4B, batch 1. "Replay-60 / replay-396" is a replay of the first 60 / all 396 recorded requests of a structured-output (JSON, SQL, tool call) workload, in order, from a fresh server; "71-test suite" is the application test suite used as a quality gate (its run-to-run spread is about +-2-3 tests, so one test more or less is noise). Greedy answers change slightly with any numerics change, so speed is quoted together with how many answers changed where that matters. Rows marked RTX 4060 were measured on an 8 GB RTX 4060 (x86, sm_89) and rows marked Qwen3.5-4B on a hybrid linear-attention model; neither helps the Gemma 4 E4B Orin stack unless the last column says so.
@@ -77,7 +67,7 @@ Two decode columns, never to be mixed up. **Drafter only** is the probe with the
 | + fused q/k/v and gate/up (with a reduced output vocabulary that was later rejected) | 63.4 | n/a | | | |
 | engine of the final design at that time (full vocabulary, GPTQ INT4 head, INT8 KV cache, split-KV attention, chunked prefill 2048, 320-page pool) | 57.2 | n/a | 1,833 | 7.44 GB | 846 s, 628 s after tree and pool tuning |
 | + centroid head, sparse draft logits | 61.2 | n/a | 1,830-1,840 | 7.43 GB | 619 s |
-| + suffix draft (served image, 2026-10-14) | not re-measured | not measured on that image | 1,830-1,840 | 7.43 GB | 545 s (same session as the 619 s: -11.9%) |
+| + suffix draft | not re-measured | not measured on that image | 1,830-1,840 | 7.43 GB | 545 s (same session as the 619 s: -11.9%) |
 | served-equivalent engine, re-measured in the session of the next row (adds the exact INT8 attention conversion) | 62.9 | Dutch 65.5, 61.5, 60.5; English 83.1 | 1,814 | 7.43 GB | 508.5 s |
 | **this benchmark's engine: + W4A8 prompt GEMM with per-op filter, + group-scale decode GEMM** | **64-66** | **Dutch 69.7, 66.7, 64.2; English 91.7** | **1,980-2,008** | **7.44 GB** | **482.9 s** |
 
