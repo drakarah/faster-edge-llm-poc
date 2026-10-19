@@ -200,7 +200,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | Quantisation from scratch inside the builder (`gptq`, needs `HF_TOKEN`) | the run used the checkpoint prepared by the same tools beforehand; the from-scratch path has not been run through the container |
 | The stock stack loading our quantised checkpoint (`gemma4_text`, MTP assistant) and building its own engine | **works** (builds in about 8 minutes, input limit set to the full context because the stock engine has no chunked prompt pass) |
 | `PROFILE=dgpu` (RTX 40-series etc.) | **untested**: no such machine was available when this was written; the settings come from separate runs on an RTX 4060 |
-| Builder -> bench -> serve through `docker compose up` on the Orin, `MODEL=gemma4-12b` | **done end to end** (2026-10-19: Orin profile with verify tree 16, W4A8 prompt pass with `MAX_K=16384`, GELU fusion plugin; 2 rounds, results below). The stock arm uses the same tree (5 x 3, verify 16), its own prefix reuse, and the whole prompt as input limit; stock's own speculative settings were not swept for the 12B |
+| Builder -> bench -> serve through `docker compose up` on the Orin, `MODEL=gemma4-12b` | **done end to end** (2026-10-19: Orin profile with verify tree 16, W4A8 prompt pass with `MAX_K=16384`; 2 rounds, results below, **from an engine built before the GELU plugin was added; a re-run with the current build is in progress**). The stock arm uses the same tree (5 x 3, verify 16), its own prefix reuse, and the whole prompt as input limit; stock's own speculative settings were not swept for the 12B |
 | `MODEL=qwen35-4b` | **untested** through this pipeline; its stock arm still uses stock's default draft settings, input limit and tool flags from before the fixes made for the E4B (`poc/config/*.sh`) and needs the same review |
 
 ### The stock arm's settings (decode probe, Orin, `gemma4-e4b`, tokens/s)
@@ -243,7 +243,9 @@ How to read it:
 
 ### Result, `gemma4-12b` (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, 2 rounds, medians; run 2026-10-19)
 
-Both stacks use the same checkpoint (INT4 weights, the 12B MTP assistant) and the same drafting tree (5 x 3, verify size 16). The optimised stack adds what the changes table lists for the 12B (INT8 KV, bounded sliding-window KV with a 4 GiB host prefix cache, W4A8 prompt pass, GELU fusion plugin, suffix draft). The target is an 8 GB card; the Orin has 32 GB, so this is evidence for speed and answer quality, not for the memory fit.
+> **Correction (2026-10-19):** this run reused an optimised engine that an earlier image had built, so it does **not** contain the GELU fusion plugin or the identity-Gather removal listed in the changes table (profiling the engine showed TensorRT's generated GELU kernels and the Gathers). The builder now stamps each engine with the pinned commit and model config and rebuilds on a mismatch. The numbers below are for the older build and will be replaced by a re-run.
+
+Both stacks use the same checkpoint (INT4 weights, the 12B MTP assistant) and the same drafting tree (5 x 3, verify size 16). The optimised stack adds INT8 KV, bounded sliding-window KV with a 4 GiB host prefix cache, W4A8 prompt pass and suffix draft (no GELU plugin in this run, see the correction). The target is an 8 GB card; the Orin has 32 GB, so this is evidence for speed and answer quality, not for the memory fit.
 
 | | stock | optimised | ratio |
 |---|---:|---:|---:|
@@ -261,4 +263,4 @@ How to read it:
 * **Warm prefill is slower than stock's.** The optimised stack restores a snapshot from pinned host memory (bounded sliding-window KV needs it to reuse anything), stock keeps the prefix in GPU pages. It pays off on long shared prefixes and hurts on a 1.5k-token one; a smaller snapshot cost is open work.
 * The replay seconds are close to a fair measure here (output lengths within 1.2%).
 * The two stacks give the same answers on only 2 of 60 replay calls (mean text similarity 0.60): INT8 KV, W4A8 prompt pass, fused kernels. HumanEval is the quality check.
-* The optimised stack's HumanEval generation speed here (58 tok/s) is lower than in separate runs on the development setup (about 70 tok/s); not yet explained.
+* The optimised stack's HumanEval generation speed here (58 tok/s) is lower than in separate runs on the development setup (about 70 tok/s). Serving this same engine on the development setup also gives 58 tok/s, so the gap is in the engine build, not the serving environment; the stale engine is the suspect and the re-run will show.
