@@ -193,20 +193,6 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | Builder -> bench -> serve through `docker compose up` on the Orin, `MODEL=gemma4-12b` | **done end to end** (2026-10-19: Orin profile with verify tree 16, W4A8 prompt pass with `MAX_K=16384`; both engines built from scratch in the container; 2 rounds, results below). The stock arm uses the same tree (5 x 3, verify 16), the same engine build maximum, its own prefix reuse, and the whole prompt as input limit; stock's own speculative settings were not swept for the 12B |
 | `MODEL=qwen35-4b` | **untested** through this pipeline; its stock arm still uses stock's default draft settings, input limit and tool flags from before the fixes made for the E4B (`poc/config/*.sh`) and needs the same review |
 
-### The stock arm's settings (decode probe, Orin, `gemma4-e4b`, tokens/s)
-
-Stock Edge-LLM's default speculative setting is a poor fit for this board, so the benchmark's stock arm does not use it. Same checkpoint, same engine build recipe, stock server flags only. **These probe numbers were measured on stock engines built for stock's default maximum tree (60); the benchmark below uses stock engines built for the same maximum as the optimised one (12), which moved stock's decode by only a few percent (32.3 to 32.5 tok/s). The sweep has not been repeated on the new engines, so whether 2 x 5 / 12 is still stock's best tree is open.**
-
-| stock setting | decode tok/s |
-|---|---:|
-| default (one chain of 6 draft steps, verify size 7) | 19.2 |
-| `--draft-step 3 --verify-tree-size 4` | 24.0 |
-| `--draft-step 2 --verify-tree-size 3` | 25.9 |
-| no speculative decoding | 29.0 |
-| **`--draft-top-k 2 --draft-step 5 --verify-tree-size 12` (used in the benchmark)** | **32.3** |
-
-The fork's gain over stock is therefore measured against stock's best of these settings, not its default. (An earlier run against stock's default setting showed 6x on replay and decode; that overstated the gain and is replaced by the results below.)
-
 ### Result (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, `gemma4-e4b`, 2 rounds, medians; run 2026-10-19)
 
 Both engines were built from scratch by the container for this run, stock with its build maximum for the tree set to the same 12 as the optimised engine (see the 12B section). Stock runs with its best speculative setting found (table above), the optimised stack with the fork's settings. Cold = a prompt the server has not seen; warm = the same prompt sent again.
