@@ -190,12 +190,12 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | Quantisation from scratch inside the builder (`gptq`, needs `HF_TOKEN`) | the run used the checkpoint prepared by the same tools beforehand; the from-scratch path has not been run through the container |
 | The stock stack loading our quantised checkpoint (`gemma4_text`, MTP assistant) and building its own engine | **works** (builds in about 8 minutes, input limit set to the full context because the stock engine has no chunked prompt pass) |
 | `PROFILE=dgpu` (RTX 40-series etc.) | **untested**: no such machine was available when this was written; the settings come from separate runs on an RTX 4060 |
-| Builder -> bench -> serve through `docker compose up` on the Orin, `MODEL=gemma4-12b` | **done end to end** (2026-10-19: Orin profile with verify tree 16, W4A8 prompt pass with `MAX_K=16384`; 2 rounds, results below, **from an engine built before the GELU plugin was added; a re-run with the current build is in progress**). The stock arm uses the same tree (5 x 3, verify 16), its own prefix reuse, and the whole prompt as input limit; stock's own speculative settings were not swept for the 12B |
+| Builder -> bench -> serve through `docker compose up` on the Orin, `MODEL=gemma4-12b` | **done end to end** (2026-10-19: Orin profile with verify tree 16, W4A8 prompt pass with `MAX_K=16384`; both engines built from scratch in the container; 2 rounds, results below). The stock arm uses the same tree (5 x 3, verify 16), the same engine build maximum, its own prefix reuse, and the whole prompt as input limit; stock's own speculative settings were not swept for the 12B |
 | `MODEL=qwen35-4b` | **untested** through this pipeline; its stock arm still uses stock's default draft settings, input limit and tool flags from before the fixes made for the E4B (`poc/config/*.sh`) and needs the same review |
 
 ### The stock arm's settings (decode probe, Orin, `gemma4-e4b`, tokens/s)
 
-Stock Edge-LLM's default speculative setting is a poor fit for this board, so the benchmark's stock arm does not use it. Same checkpoint, same engine build recipe, stock server flags only:
+Stock Edge-LLM's default speculative setting is a poor fit for this board, so the benchmark's stock arm does not use it. Same checkpoint, same engine build recipe, stock server flags only. **These probe numbers were measured on stock engines built for stock's default maximum tree (60); the benchmark below uses stock engines built for the same maximum as the optimised one (12), which moved stock's decode by only a few percent (32.3 to 32.5 tok/s). The sweep has not been repeated on the new engines, so whether 2 x 5 / 12 is still stock's best tree is open.**
 
 | stock setting | decode tok/s |
 |---|---:|
@@ -207,50 +207,49 @@ Stock Edge-LLM's default speculative setting is a poor fit for this board, so th
 
 The fork's gain over stock is therefore measured against stock's best of these settings, not its default. (An earlier run against stock's default setting showed 6x on replay and decode; that overstated the gain and is replaced by the results below.)
 
-### Result (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, `gemma4-e4b`, 2 rounds, medians; run 2026-10-18)
+### Result (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, `gemma4-e4b`, 2 rounds, medians; run 2026-10-19)
 
-Stock runs with its best speculative setting found (table above), the optimised stack with the fork's settings. Cold = a prompt the server has not seen; warm = the same prompt sent again.
+Both engines were built from scratch by the container for this run, stock with its build maximum for the tree set to the same 12 as the optimised engine (see the 12B section). Stock runs with its best speculative setting found (table above), the optimised stack with the fork's settings. Cold = a prompt the server has not seen; warm = the same prompt sent again.
 
 | | stock | optimised | ratio |
 |---|---:|---:|---:|
-| Prefill, fresh ~1.5k-token prompt (cold), tok/s | 1,407 | 2,110 | 1.50x |
-| Same prompt again (warm, prefix reused), time to first token | 0.165 s | 0.083 s | 1.98x |
-| Decode, first request of a prompt (cold), tok/s | 31.2 | 89.8 | 2.88x |
-| Decode, same prompt again (warm), tok/s | 33.5 | 92.2 | 2.75x |
-| HumanEval generation, tok/s | 39.3 | 165.0 | 4.20x |
-| HumanEval pass@1 (greedy), per round | 138, 139 / 164 | 137, 139 / 164 | equal within noise |
-| Replay of 60 recorded calls, seconds | 510.6 | 109.4 | 4.67x |
-| Replay output tokens | 27,909 | 10,362 | 2.7x |
+| Prefill, fresh ~1.5k-token prompt (cold), tok/s | 1,412 | 2,417 | 1.71x |
+| Same prompt again (warm, prefix reused), time to first token | 0.163 s | 0.077 s | 2.12x |
+| Decode, first request of a prompt (cold), tok/s | 32.5 | 92.5 | 2.85x |
+| Decode, same prompt again (warm), tok/s | 32.9 | 121.6 | 3.70x |
+| HumanEval generation, tok/s | 39.2 | 170.0 | 4.34x |
+| HumanEval pass@1 (greedy), per round | 142, 143 / 164 | 138, 139 / 164 | optimised 3-4 problems lower (about 2.4 points; engine-to-engine spread has been that large) |
+| Replay of 60 recorded calls, seconds | 510.9 | 105.4 | 4.85x |
+| Replay output tokens | 27,845 | 10,267 | 2.7x |
 
 How to read it:
-* **Tokens per second is the fair speed measure, replay seconds are not.** The stock stack answers structured (JSON) requests with 2.7 times as many tokens because it lets the model pad the JSON with long whitespace runs; the optimised stack caps those runs (`EDGELLM_JSON_MAX_WHITESPACE=20`). The 4.67x replay figure mixes speed with that length difference.
-* **Decode on prose is 2.8-2.9x**, on code (HumanEval) 4.2x: structured and code output are what the suffix draft and the deeper tree help most.
-* **Cold and warm decode are close** here (stock 31 / 34, optimised 90 / 92 tok/s): repeating a prompt gains only a few percent, so the earlier single-prompt probe was not much inflated by repeats. Warm prefill is the prefix cache: both stacks reuse it, ours is 2x faster at the remainder.
-* The two stacks do not give the same greedy answers (5 of 60 identical on the replay): INT8 KV cache, W4A8 prompt pass, fused kernels, and stock has no `gemma4` tool-call parser.
-* The decode numbers of the optimised stack move by a few tok/s between rounds (88.6-91.1 cold); HumanEval and replay repeat to about 1%.
-* What is switched on in the optimised stack: see the table above (INT8 prompt GEMM with a per-op filter on the Orin, group-scale-on-partial-sums INT4 GEMM, exact INT8 KV conversion in the decode attention, plus the older changes). The two GEMM changes were only run on the Orin (sm_87).
+* **Tokens per second is the fair speed measure, replay seconds are not.** The stock stack answers structured (JSON) requests with 2.7 times as many tokens because it lets the model pad the JSON with long whitespace runs; the optimised stack caps those runs (`EDGELLM_JSON_MAX_WHITESPACE=20`). The 4.85x replay figure mixes speed with that length difference.
+* **Decode on prose is 2.9x cold**, on code (HumanEval) 4.3x: structured and code output are what the suffix draft and the deeper tree help most.
+* **Warm decode of the optimised stack is higher than cold** (122 against 93 tok/s, and it varies between rounds: 114-129 warm, 90-95 cold) because a repeated prompt lets the suffix draft match its own earlier answer; stock gains nothing from it (32.5 / 32.9). Cold decode is the number to quote for new prompts.
+* Warm prefill is the prefix cache: both stacks reuse it, ours is 2x faster at the remainder.
+* The two stacks do not give the same greedy answers (7 of 60 identical on the replay, mean text similarity 0.50): INT8 KV cache, W4A8 prompt pass, fused kernels, and stock has no `gemma4` tool-call parser.
+* HumanEval pass counts repeat within an engine (142/143 and 138/139 here) but differ between engines; the 3-4 problem gap is the size of the spread seen between two different builds of the same stack, so it is not evidence of a quality loss, nor of the absence of one.
+* What is switched on in the optimised stack: see the table above (INT8 prompt GEMM with a per-op filter on the Orin, group-scale-on-partial-sums INT4 GEMM, exact INT8 KV conversion in the decode attention, GELU fusion plugin, plus the older changes). The two GEMM changes were only run on the Orin (sm_87).
 * Not compared yet: a third arm with the fork's engine but stock-equivalent settings (suffix draft and the other fork-only switches off), to split the gain between settings and code.
 
 ### Result, `gemma4-12b` (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, 2 rounds, medians; run 2026-10-19)
 
-> **Correction (2026-10-19):** this run reused an optimised engine that an earlier image had built, so it does **not** contain the GELU fusion plugin or the identity-Gather removal listed in the changes table (profiling the engine showed TensorRT's generated GELU kernels and the Gathers, and that it was built for verify size 20, not 16). The builder now stamps each engine with the pinned commit and model config and rebuilds on a mismatch. The numbers below are for the older build and will be replaced by a re-run.
-
-Both stacks use the same checkpoint (INT4 weights, the 12B MTP assistant) and the same drafting tree (5 x 3, verify size 16). The optimised stack adds INT8 KV, bounded sliding-window KV with a 4 GiB host prefix cache, W4A8 prompt pass and suffix draft (no GELU plugin in this run, see the correction). The target is an 8 GB card; the Orin has 32 GB, so this is evidence for speed and answer quality, not for the memory fit.
+Both stacks use the same checkpoint (INT4 weights, the 12B MTP assistant), the same drafting tree (5 x 3, verify size 16) and the same engine build maximum for it (stock's `--max-verify-tree-size` and `--max-draft-tree-size` are set to 16 too; left at its default of 60, stock's INT4 GEMM would be tuned for 60 rows). Both engines were built from scratch by the container for this run. The optimised stack adds INT8 KV, bounded sliding-window KV with a 4 GiB host prefix cache, W4A8 prompt pass, suffix draft and the GELU fusion plugin. The target is an 8 GB card; the Orin has 32 GB, so this is evidence for speed and answer quality, not for the memory fit.
 
 | | stock | optimised | ratio |
 |---|---:|---:|---:|
-| Prefill, fresh ~1.5k-token prompt (cold), tok/s | 739 | 911 | 1.23x |
-| Same prompt again (warm, prefix reused), time to first token | 0.275 s | 0.437 s | **0.63x (optimised is slower)** |
-| Decode, first request of a prompt (cold), tok/s | 27.4 | 34.1 | 1.25x |
-| Decode, same prompt again (warm), tok/s | 27.2 | 40.0 | 1.47x |
-| HumanEval generation, tok/s | 35.7 | 58.4 | 1.64x |
-| HumanEval pass@1 (greedy), per round | 153, 152 / 164 | 154, 153 / 164 | equal within noise |
-| Replay of 60 recorded calls, seconds | 561.8 | 310.3 | 1.81x |
-| Replay output tokens | 10,094 | 9,979 | |
+| Prefill, fresh ~1.5k-token prompt (cold), tok/s | 738 | 956 | 1.30x |
+| Same prompt again (warm, prefix reused), time to first token | 0.275 s | 0.406 s | **0.68x (optimised is slower)** |
+| Decode, first request of a prompt (cold), tok/s | 26.9 | 40.6 | 1.51x |
+| Decode, same prompt again (warm), tok/s | 27.2 | 50.6 | 1.86x |
+| HumanEval generation, tok/s | 35.9 | 70.5 | 1.96x |
+| HumanEval pass@1 (greedy), per round | 154, 151 / 164 | 150, 151 / 164 | equal within noise |
+| Replay of 60 recorded calls, seconds | 557.9 | 273.9 | 2.04x |
+| Replay output tokens | 10,092 | 10,275 | |
 
 How to read it:
-* **The gain is smaller than on the E4B** (decode 1.25-1.47x against 2.9x, HumanEval generation 1.64x against 4.2x). The 12B decode round is dominated by the INT4 weight reads (about 85% of the memory roofline after the tile fix), so there is less left for drafting and kernel work to win; and this comparison gives stock the same drafting tree, which the E4B comparison did not.
-* **Warm prefill is slower than stock's.** The optimised stack restores a snapshot from pinned host memory (bounded sliding-window KV needs it to reuse anything), stock keeps the prefix in GPU pages. It pays off on long shared prefixes and hurts on a 1.5k-token one; a smaller snapshot cost is open work.
-* The replay seconds are close to a fair measure here (output lengths within 1.2%).
-* The two stacks give the same answers on only 2 of 60 replay calls (mean text similarity 0.60): INT8 KV, W4A8 prompt pass, fused kernels. HumanEval is the quality check.
-* The optimised stack's HumanEval generation speed here (58 tok/s) is lower than in separate runs on the development setup (about 70 tok/s). Serving this same engine on the development setup also gives 58 tok/s, so the gap is in the engine build. The cause: the engine was built with a maximum verify size of 20 (the earlier setting) and only served at 16, so the INT4 GEMM was tuned for 20 rows and runs 16 rows in a 32-row tile (half of it idle). The engine built for 16 uses a 16-row tile; see the verify-size row of the changes table.
+* **The gain is smaller than on the E4B** and the 12B decode round is dominated by the INT4 weight reads (about 85% of the memory roofline after the tile fix), so there is less left for drafting and kernel work to win. This comparison also gives stock the same drafting tree.
+* **Warm prefill is slower than stock's.** The optimised stack restores a snapshot from pinned host memory (bounded sliding-window KV needs it to reuse anything), stock keeps the prefix in GPU pages. Both reuse the prefix (a cold 1.5k-token prompt takes about 2 s on stock, the warm one 0.28 s). It pays off on long shared prefixes and hurts on a 1.5k-token one; a smaller snapshot cost is open work.
+* The replay seconds are close to a fair measure here (output lengths within 2%).
+* The two stacks give the same answers on only 2 of 60 replay calls (mean text similarity 0.61): INT8 KV, W4A8 prompt pass, fused kernels. HumanEval is the quality check; the pass counts move by 2-4 between rounds on the same engine setup, so the 150-154 range is noise.
+* An earlier run of this table (2026-10-19, before the GELU plugin existed) used an optimised engine built for a maximum verify size of 20 and served at 16, so the INT4 GEMM ran 16 rows in a 32-row tile (half idle): it showed 58 tok/s on HumanEval generation. The engine is now built for 16 (builder stamps each engine with the pinned commit and model config and rebuilds on a mismatch).

@@ -20,6 +20,6 @@ SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MTP_SUF
 # --- stock stack: upstream's documented path (the server builds its own engine from the checkpoint) ---
 # upstream has no chunked prompt pass: the engine must take a whole prompt, so its input limit is the full context
 # stock's own default drafting (one chain of 6, verify size 7) decodes at 19 tok/s on the Orin, slower than no speculation (29); stock's tree flags
-# with the same values the optimised stack uses give 32 tok/s (measured, README), so the stock arm gets those: its best setting, not a strawman.
+# with the same values the optimised stack uses give 32 tok/s (measured on engines built for the default maximum tree of 60; 32.5 on the engines built for TREE, README), so the stock arm gets those: its best setting, not a strawman.
 STOCK_ARGS="--max-input-len $CAP --max-kv-cache-capacity $CAP --enable-context-reuse --enable-auto-tool-choice --draft-top-k 2 --draft-step 5 --verify-tree-size 12 --max-verify-tree-size $TREE --max-draft-tree-size $TREE"
 STOCK_SPEC='{"method":"mtp","model":"@ASSIST@"}'
