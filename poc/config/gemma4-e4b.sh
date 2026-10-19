@@ -6,7 +6,7 @@ GPTQ_SAMPLES=256
 KV_SCALES=$POC/data/gemma4-e4b-int8-kv-scales.json
 # --- optimised stack ---
 MAXIN=2048; CAP=10240; POOL=320; TREE=12              # engine: prompt tokens per pass, KV capacity, KV pool pages (prefix reuse), max verify tree
-EXPORT_ENV="EDGELLM_FUSE_GEMMA4_INT4=1 EDGELLM_INT8_KV_SCALES=$KV_SCALES EDGELLM_GEMMA4_SPARSE_DRAFT_LOGITS=1"
+EXPORT_ENV="EDGELLM_GEMMA4_GELU_PLUGIN=1 EDGELLM_FUSE_GEMMA4_INT4=1 EDGELLM_INT8_KV_SCALES=$KV_SCALES EDGELLM_GEMMA4_SPARSE_DRAFT_LOGITS=1"
 EXPORT_ARGS="--externalize-weights int4_ffn --mtp"
 INT8_EMBEDDINGS=1
 SERVE_ARGS="--draft-top-k 2 --draft-step 5 --verify-tree-size 12 --enable-context-reuse"
