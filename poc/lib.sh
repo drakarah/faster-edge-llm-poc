@@ -74,6 +74,10 @@ quantise_qwen() {
     --quantization int4_awq --lm_head_quantization int4_awq --device $DEV --num_samples $SAMPLES
 }
 
+build_stamp() {  # $1 pinned commit of the stack: changes when the image is rebuilt on another commit or the model config changes
+  echo "$1 $(md5sum $POC/config/$MODEL.sh | cut -c1-12)"
+}
+
 builder() {
   step "model $MODEL, profile $PROFILE"
   [ -f $CKPT_DIR/.done ] || {
@@ -83,8 +87,9 @@ builder() {
     quantise_$KIND
     touch $CKPT_DIR/.done
   }
-  [ -f $FAST/.done ] || build_fast
-  [ -f $STOCK_CACHE/.done ] || build_stock
+  # An engine is only reused when it was built by this image's pinned fork commit with this model's config; the stamp is stored in .done.
+  [ "$(cat $FAST/.done 2>/dev/null)" = "$(build_stamp $FAST_REF)" ] || build_fast
+  [ "$(cat $STOCK_CACHE/.done 2>/dev/null)" = "$(build_stamp $STOCK_REF)" ] || build_stock
   step "builder finished"
 }
 
@@ -103,7 +108,7 @@ build_fast() {
   $LLM_BUILD --onnxDir $FAST/onnx/mtp_draft --engineDir $OUT $COMMON --maxDraftTreeSize $TREE --specDraft > $LOG_DIR/$MODEL-$PROFILE-build-draft.log 2>&1
   [ "$INT8_EMBEDDINGS" = 1 ] && { python $POC/tools/quantize_ple.py $FAST/engine_fp $FAST/engine --token-embedding; rm -rf $FAST/engine_fp; }
   rm -rf $FAST/onnx
-  touch $FAST/.done
+  build_stamp $FAST_REF > $FAST/.done
 }
 
 # Wait until the server on $1 answers /health, or its process $2 dies, or $3 seconds pass.
@@ -137,7 +142,7 @@ build_stock() {
   step "stock stack: its server builds its own engine on first start (can take a long time)"
   start_stock $BENCH_PORT
   if wait_ready $BENCH_PORT $SERVER_PID 14400; then
-    touch $STOCK_CACHE/.done
+    build_stamp $STOCK_REF > $STOCK_CACHE/.done
   else
     echo "stock stack failed to start; last log lines:"; tail -n 20 $LOG_DIR/$MODEL-$PROFILE-stock-server.log
     echo "STOCK_FAILED" > $STOCK_CACHE/.failed; touch $STOCK_CACHE/.done
