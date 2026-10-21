@@ -36,6 +36,8 @@ if [ "$PROFILE" = dgpu ]; then
   EXPORT_ENV="$EXPORT_ENV EDGELLM_GEMMA4_DRAFT_HEAD_INT4=1"
   SERVE_ARGS="--draft-top-k 6 --draft-step 3 --verify-tree-size 16 --tool-call-parser gemma4"
   BUILD_ENV="EDGELLM_XQA_NVRTC_OPTS=-DXQA_QK_INT8=1"
+  # 8 GB card: capacity 32,768 uses 7,515 MiB, 49,152 loads at 7,697 MiB, 65,536 fails (CUDA out of memory in the runtime, with and without split-KV).
+  CAP=49152; LONGCTX_DEFAULT="$LONGCTX_DEFAULT,40000,46000"
 fi
 SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MTP_SUFFIX_DRAFT=19 EDGELLM_MTP_SUFFIX_MIN=3 EDGELLM_MTP_SUFFIX_PROMPT=16384"
 if [ "$PROFILE" = dgpu ]; then

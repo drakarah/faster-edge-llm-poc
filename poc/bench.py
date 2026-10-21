@@ -129,7 +129,8 @@ def longctx(url, lengths):
         try:
             n = max(8, int(target / per))
             q = f"What is the valve in bay {n // 2} set to? Answer with the number only."
-            _, _, _, pt = stream_chat(url, [{"role": "user", "content": long_prompt(n, uuid.uuid4(), q)}], 1)  # calibration
+            for _ in range(2):  # calibration, and an untimed second pass: a freshly started server pays one-time costs on its first long prompts (28 s on the first 1k-token one)
+                _, _, _, pt = stream_chat(url, [{"role": "user", "content": long_prompt(n, uuid.uuid4(), q)}], 1)
             per = pt / n
             n = max(8, int(target / per))
             colds, tokens, ok, first_msgs = [], 0, 0, None
