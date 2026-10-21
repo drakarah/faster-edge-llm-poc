@@ -33,8 +33,8 @@ RUN git clone "${FAST_REPO}" /opt/fast && git -C /opt/fast checkout "${FAST_REF}
 # scale to FP32 partial sums once per quantisation group (EDGELLM_INT4_GEMM_GROUP_FLUSH, fewer instructions per tensor op), and on
 # the discrete GPU FP16 accumulation in the INT4 GEMM (twice the tensor rate on GeForce parts; no gain on a Jetson, so it is left off there).
 RUN PROFILE=${PROFILE} GPU_ARCH=${GPU_ARCH} BUILD_JOBS=${BUILD_JOBS} build_edgellm.sh /opt/stock
-RUN PROFILE=${PROFILE} GPU_ARCH=${GPU_ARCH} BUILD_JOBS=${BUILD_JOBS} \
-    EDGELLM_INT4_GEMM_GROUP_FLUSH=1 $( [ "${PROFILE}" = dgpu ] && echo EDGELLM_INT4_GEMM_FP16_ACC_MIN_BM=64 ) build_edgellm.sh /opt/fast
+RUN env PROFILE=${PROFILE} GPU_ARCH=${GPU_ARCH} BUILD_JOBS=${BUILD_JOBS} \
+    EDGELLM_INT4_GEMM_GROUP_FLUSH=1 $( [ "${PROFILE}" = dgpu ] && echo EDGELLM_INT4_GEMM_FP16_ACC_MIN_BM=64 || true ) build_edgellm.sh /opt/fast
 
 COPY poc /poc
 ENV PYTHONDONTWRITEBYTECODE=1 PROFILE=${PROFILE} FAST_REF=${FAST_REF} STOCK_REF=${STOCK_REF}
