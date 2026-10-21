@@ -17,7 +17,7 @@ ARG BUILD_JOBS=8
 ARG STOCK_REPO=https://github.com/NVIDIA/TensorRT-Edge-LLM.git
 ARG STOCK_REF=0f52705723abfa8c6702654bfdcc082a728ed353
 ARG FAST_REPO=https://github.com/drakarah/TensorRT-Edge-LLM.git
-ARG FAST_REF=cd594026d84d99326fed6ceab79fa60eb4827c44
+ARG FAST_REF=2e02476b99abae0658611179e5eb0665559fb186
 
 # Python dependencies of the exporter, the server and the quantisation tools (torch and numpy come from the base image).
 COPY poc/build/pins.txt /tmp/pins.txt

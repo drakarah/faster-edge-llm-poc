@@ -25,9 +25,21 @@ if [ "$PROFILE" = orin ]; then
   EXPORT_ENV="$EXPORT_ENV EDGELLM_GEMMA4_DRAFT_HEAD_INT4=1"
   SERVE_ARGS="--draft-top-k 5 --draft-step 3 --verify-tree-size 16 --tool-call-parser gemma4"
 fi
+# RTX 4060 (measured there, same recipe as the Orin where it carried over): verify tree 16 over 20 (-1.5% wall, tree sweep re-done on the current engine), INT4 drafter
+# MLP + INT4 candidate head (decode round -5.5%, draft engine 848 -> 179 MB), and INT8 Q.K^T in the head-512 *decode* attention (kernel 0.78x of the FP16 one at 6k-24k tokens,
+# needles 41/48 vs 40/48, HumanEval 151.5/164 both, 71 tests 64/71). The decode kernel is compiled in at engine build (BUILD_ENV): a build-time macro, off by default,
+# only active for head dim 512 + INT8 KV + tree verification (the 12B's 8 global layers). Not measured on the Orin (there the V loads are the critical path).
+BUILD_ENV=""
+if [ "$PROFILE" = dgpu ]; then
+  TREE=16
+  DRAFTER_INT4_MLP=1
+  EXPORT_ENV="$EXPORT_ENV EDGELLM_GEMMA4_DRAFT_HEAD_INT4=1"
+  SERVE_ARGS="--draft-top-k 6 --draft-step 3 --verify-tree-size 16 --tool-call-parser gemma4"
+  BUILD_ENV="EDGELLM_XQA_NVRTC_OPTS=-DXQA_QK_INT8=1"
+fi
 SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MTP_SUFFIX_DRAFT=19 EDGELLM_MTP_SUFFIX_MIN=3 EDGELLM_MTP_SUFFIX_PROMPT=16384"
 if [ "$PROFILE" = dgpu ]; then
-  SERVE_ENV="$SERVE_ENV EDGELLM_EMBEDDING_ON_HOST=1 EDGELLM_SWA_PREFIX_CACHE_MB=16384"   # an 8 GB card: tables and prefix snapshots in pinned host RAM
+  SERVE_ENV="$SERVE_ENV EDGELLM_EMBEDDING_ON_HOST=1 EDGELLM_SWA_PREFIX_CACHE_MB=16384 EDGELLM_FMHA_INT8_QK=1"   # INT8 Q.K^T also in the prompt pass (23k prompt 18.6 -> 13.1 s); # an 8 GB card: tables and prefix snapshots in pinned host RAM
 else
   SERVE_ENV="$SERVE_ENV EDGELLM_INT4_GEMV_MAX_M=1 EDGELLM_SWA_PREFIX_CACHE_MB=4096"        # unified memory: no host-side tricks
   # INT8 tensor-core prompt GEMM (W4A8): prompt speed +15%, replay of 60 calls -8.5%, HumanEval 93.9% (off 90.9%, a single greedy run each: no visible loss).
@@ -40,6 +52,7 @@ fi
 # --verify-tree-size is only the tree used at run time; the engine is built for --max-verify-tree-size / --max-draft-tree-size (default 60) and its INT4 GEMM
 # is tuned for that size, so stock gets the same engine maximum as the optimised build ($TREE): otherwise it would run 16 rows in 64-row tiles.
 STOCK_VERIFY=20; STOCK_TREE="--draft-top-k 6 --draft-step 3 --verify-tree-size 20"
+[ "$PROFILE" = dgpu ] && { STOCK_VERIFY=16; STOCK_TREE="--draft-top-k 6 --draft-step 3 --verify-tree-size 16"; }   # same tree as the optimised arm
 [ "$PROFILE" = orin ] && { STOCK_VERIFY=16; STOCK_TREE="--draft-top-k 5 --draft-step 3 --verify-tree-size 16"; }
 STOCK_ARGS="--max-input-len 12288 --max-kv-cache-capacity 12288 --enable-context-reuse --enable-auto-tool-choice $STOCK_TREE --max-verify-tree-size $STOCK_VERIFY --max-draft-tree-size $STOCK_VERIFY"
 STOCK_SPEC='{"method":"mtp","model":"@ASSIST@"}'

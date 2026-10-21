@@ -108,8 +108,8 @@ build_fast() {
   export EDGELLM_XQA_MULTI_BLOCK=auto                       # split-KV decode attention, sized from the GPU's SM count
   local COMMON="--maxInputLen $MAXIN --maxKVCacheCapacity $CAP --maxBatchSize 1 --maxKVPoolPages $POOL"
   local OUT=$FAST/engine; [ "$INT8_EMBEDDINGS" = 1 ] && OUT=$FAST/engine_fp
-  $LLM_BUILD --onnxDir $FAST/onnx/llm --engineDir $OUT $COMMON --maxVerifyTreeSize $TREE --specBase > $LOG_DIR/$MODEL-$PROFILE-build-base.log 2>&1
-  $LLM_BUILD --onnxDir $FAST/onnx/mtp_draft --engineDir $OUT $COMMON --maxDraftTreeSize $TREE --specDraft > $LOG_DIR/$MODEL-$PROFILE-build-draft.log 2>&1
+  env ${BUILD_ENV:-} $LLM_BUILD --onnxDir $FAST/onnx/llm --engineDir $OUT $COMMON --maxVerifyTreeSize $TREE --specBase > $LOG_DIR/$MODEL-$PROFILE-build-base.log 2>&1
+  env ${BUILD_ENV:-} $LLM_BUILD --onnxDir $FAST/onnx/mtp_draft --engineDir $OUT $COMMON --maxDraftTreeSize $TREE --specDraft > $LOG_DIR/$MODEL-$PROFILE-build-draft.log 2>&1
   [ "$INT8_EMBEDDINGS" = 1 ] && { python $POC/tools/quantize_ple.py $FAST/engine_fp $FAST/engine --token-embedding; rm -rf $FAST/engine_fp; }
   rm -rf $FAST/onnx
   build_stamp $FAST_REF > $FAST/.done
