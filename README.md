@@ -183,7 +183,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 
 ## Status
 
-**End-to-end runs done on the Orin for `gemma4-e4b` and `gemma4-12b`.** Results are at the end of this file. What has been checked and what has not:
+**End-to-end runs done on the Orin for `gemma4-e4b`, `gemma4-12b` and `qwen35-4b` (2026-10-21/22, one frozen commit, see below), and on an RTX 4060 for the optimised arm only.** Results are at the end of this file. What has been checked and what has not:
 
 | | state |
 |---|---|
@@ -194,55 +194,285 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | Builder (export, engine build) -> bench -> serve through `docker compose up` on the Orin, `MODEL=gemma4-e4b` | **done end to end** (2026-10-18: engines built inside the containers in about 8 minutes each, 2 benchmark rounds in about 1.5 h, results below) |
 | Quantisation from scratch inside the builder (`gptq`, needs `HF_TOKEN`) | the run used the checkpoint prepared by the same tools beforehand; the from-scratch path has not been run through the container |
 | The stock stack loading our quantised checkpoint (`gemma4_text`, MTP assistant) and building its own engine | **works** (builds in about 8 minutes, input limit set to the full context because the stock engine has no chunked prompt pass) |
-| `PROFILE=dgpu` (RTX 40-series etc.) | **untested**: no such machine was available when this was written; the settings come from separate runs on an RTX 4060 |
+| `PROFILE=dgpu` (RTX 40-series etc.) | **run on an RTX 4060 8 GB (2026-10-21/22), optimised arm only**: stock Edge-LLM does not load on that card for any of the three models (CUDA out of memory at runtime start, see the 4060 section) |
 | Builder -> bench -> serve through `docker compose up` on the Orin, `MODEL=gemma4-12b` | **done end to end** (2026-10-19: Orin profile with verify tree 16, W4A8 prompt pass with `MAX_K=16384`; both engines built from scratch in the container; 2 rounds, results below). The stock arm uses the same tree (5 x 3, verify 16), the same engine build maximum, its own prefix reuse, and the whole prompt as input limit; stock's own speculative settings were not swept for the 12B |
-| `MODEL=qwen35-4b` | **untested** through this pipeline; its stock arm is configured like the Gemma ones (the optimised arm's drafting tree, engine build maximum and context length; stock has no hybrid prefix reuse, so if it rejects the reuse flag it runs without) but that has not been run |
+| `MODEL=qwen35-4b` | **done end to end on the Orin** (2026-10-21/22): INT4-AWQ checkpoint made by the builder with 64 calibration samples (256 did not fit the Orin's shared 30 GB, see the Qwen section), both engines built in the container, 2 rounds. Stock is configured like the optimised arm (same drafting tree, engine build maximum, context length) except that it runs **without prefix reuse**: it refuses `--enable-context-reuse` on this hybrid model at start ("Hybrid context reuse requires at least one recurrent snapshot slot"), which is an upstream gap that the fork's hybrid prefix reuse closes |
 
-> **Pin note (2026-10-21):** the image now pins the fork's `dev` at `cd59402` (adds the INT4 drafter head and MLP for the 12B on the Orin, W4A8 stage 4, split-K 3/5 decode variants). The result tables below were measured with the previous pin (`e4fd0ef`) and have not been re-run yet; the new pin builds and serves the 12B on the Orin (builder 12 minutes, engine loads, answers checked), nothing more is claimed for it.
+> **Pin note (2026-10-22):** the image pins the fork's `dev` at `2e02476` (INT4 drafter head and MLP for the 12B on the Orin, W4A8 stage 4, split-K 3/5 decode variants, and the optional INT8 Q.K^T decode attention that only the 4060 profile switches on). All result tables below were re-run on this pin, on poc `main` c5d0f39 (the Orin image was built from the Dockerfile of 3eeb42e, identical for `PROFILE=orin`). Earlier tables (pin `e4fd0ef`, 2026-10-19) are replaced.
 
-### Result (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, `gemma4-e4b`, 2 rounds, medians; run 2026-10-19)
+### Results, 2026-10-21/22 (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, 2 rounds, medians)
 
-Both engines were built from scratch by the container for this run, stock with its build maximum for the tree set to the same 12 as the optimised engine (see the 12B section). Stock runs with the same drafting tree as the optimised stack (2 x 5, verify 12), the optimised stack additionally with the fork's own features. Cold = a prompt the server has not seen; warm = the same prompt sent again.
+**Setup.** One frozen commit for all runs on both machines: poc `main` c5d0f39, fork `dev` 2e02476, stock NVIDIA 0f52705. The Gemma checkpoints and the Qwen AWQ checkpoint are the same files on both machines (the 4060 copied them from the Orin; sha256 of the two files compared equal). Stock gets the optimised arm's settings wherever it has the same knob (drafting tree, engine build maximum for the tree, context length, the drafter checkpoint), not its best settings. Fork-only features (suffix draft, plugins, W4A8 prompt pass, INT8 KV cache, INT4 drafter head and MLP for the 12B, hybrid prefix reuse, ...) are what is being measured. Two rounds, stock and optimised alternated per round, medians.
 
-| | stock | optimised | ratio |
+**Caveats that apply to the tables below.**
+* **Qwen stock runs without prefix reuse** (upstream gap, see the status table). The Qwen AWQ checkpoint was calibrated with 64 samples (an attempt with 256 was killed by the kernel for memory on the Orin's shared 30 GB pool); the 4060 reuses that checkpoint.
+* **The 12B stock engine only holds 12,288 tokens** (it has no chunked prefill, so its input limit is its whole context), so the long-context rows show "refused / failed" from 16,384 tokens: the table states it, it is not hidden. The optimised 12B engine holds 32,768 on the Orin.
+* **The 12B warm rows at 11,500 tokens and above equal the cold ones on the Orin**: the host prefix cache is 4 GiB and keeps one snapshot of the bounded window per 1,024-token prefill chunk, so the three needle prompts of one length do not all fit; this is a cache-size effect, not a limit of the technique (fork branch `rtx4060/swa-prefix-capture-interval` keeps 2.5-3x more prompts; not part of this pin). Warm prefill at short lengths is slower than stock's for the 12B (the snapshot restore).
+* **HumanEval uses a 1024-token answer cap.** On the E4B most of the optimised arm's lower pass count comes from answers cut off at that cap (failures not ending in a closed code block: stock 7 and 9, optimised 11 and 18 across the two rounds; a proxy, `finish_reason` is not recorded), and the optimised arm varies more between rounds (8 problems flip between its two rounds, 2 for stock). With a 4096-token cap an earlier A/B showed no truncation and mean lengths of 414 vs 409 tokens. We have not re-run the E4B pair with a larger cap.
+* **Needle retrieval (3 planted facts) is 2 of 3 at several lengths on both arms** (stock 8,192 tokens, optimised 8,192 and up to 30,000 on the 12B); not investigated.
+* The replay output lengths differ between the stacks (the stock stack pads structured JSON with long whitespace runs on the E4B and Qwen), so tokens per second is the fair speed number there and the replay seconds mix speed with answer length.
+
+#### gemma4-12b on orin: stock Edge-LLM vs optimised fork (2 rounds, medians)
+
+| | stock | optimised | speed-up |
 |---|---:|---:|---:|
-| Prefill, fresh ~1.5k-token prompt (cold), tok/s | 1,412 | 2,417 | 1.71x |
-| Same prompt again (warm, prefix reused), time to first token | 0.163 s | 0.077 s | 2.12x |
-| Decode, first request of a prompt (cold), tok/s | 32.5 | 92.5 | 2.85x |
-| Decode, same prompt again (warm), tok/s | 32.9 | 121.6 | 3.70x |
-| HumanEval generation, tok/s | 39.2 | 170.0 | 4.34x |
-| HumanEval pass@1 (greedy), per round | 142, 143 / 164 | 138, 139 / 164 | optimised 3-4 problems lower (about 2.4 points; engine-to-engine spread has been that large) |
-| Replay of 60 recorded calls, seconds | 510.9 | 105.4 | 4.85x |
-| Replay output tokens | 27,845 | 10,267 | 2.7x |
+| Prefill of a fresh ~1.5k-token prompt (cold), tokens/s (higher is better) | 740 | 1,012 | **1.37x** |
+| Same prompt again (warm, prefix reused), time to first token, seconds (lower is better) | 0.276 | 0.404 | **0.68x** |
+| Decode, first request of a prompt (cold), tokens/s (higher is better) | 27.2 | 43.0 | **1.58x** |
+| Decode, same prompt again (warm), tokens/s (higher is better) | 27.1 | 49.3 | **1.82x** |
+| Replay of 60 recorded requests, seconds (lower is better) | 557.2 | 256.2 | **2.18x** |
+| Replay output tokens in total (the stacks do not answer with the same length) | 10,090 | 10,402 |  |
+| HumanEval generation, tokens/s (higher is better) | 35.9 | 76.5 | **2.13x** |
 
-How to read it:
-* **Tokens per second is the fair speed measure, replay seconds are not.** The stock stack answers structured (JSON) requests with 2.7 times as many tokens because it lets the model pad the JSON with long whitespace runs; the optimised stack caps those runs (`EDGELLM_JSON_MAX_WHITESPACE=20`). The 4.85x replay figure mixes speed with that length difference.
-* **Decode on prose is 2.9x cold**, on code (HumanEval) 4.3x: structured and code output are what the suffix draft and the deeper tree help most.
-* **Warm decode of the optimised stack is higher than cold** (122 against 93 tok/s, and it varies between rounds: 114-129 warm, 90-95 cold) because a repeated prompt lets the suffix draft match its own earlier answer; stock gains nothing from it (32.5 / 32.9). Cold decode is the number to quote for new prompts.
-* Warm prefill is the prefix cache: both stacks reuse it, ours is 2x faster at the remainder.
-* The two stacks do not give the same greedy answers (7 of 60 identical on the replay, mean text similarity 0.50): INT8 KV cache, W4A8 prompt pass, fused kernels, and stock has no `gemma4` tool-call parser.
-* HumanEval pass counts repeat within an engine (142/143 and 138/139 here) but differ between engines; the 3-4 problem gap is the size of the spread seen between two different builds of the same stack, so it is not evidence of a quality loss, nor of the absence of one.
-* What is switched on in the optimised stack: see the table above (INT8 prompt GEMM with a per-op filter on the Orin, group-scale-on-partial-sums INT4 GEMM, exact INT8 KV conversion in the decode attention, GELU fusion plugin, plus the older changes). The two GEMM changes were only run on the Orin (sm_87).
-* Not compared yet: a third arm with the fork's engine but stock-equivalent settings (suffix draft and the other fork-only switches off), to split the gain between settings and code.
+HumanEval pass@1 (greedy, public benchmark), per round: stock 152/164 / 153/164; optimised 149/164 / 148/164.
 
-### Result, `gemma4-12b` (Jetson AGX Orin 32 GB, GPU pinned at 930 MHz, 2 rounds, medians; run 2026-10-19)
+Greedy answers identical to stock: 3/60 (mean text similarity 0.618). Quantised weights are the same; the optimised stack also uses an INT8 KV cache and fused kernels, so some answers differ in wording. Read the two answers of the first request in `results/`.
 
-Both stacks use the same checkpoint (INT4 weights, the 12B MTP assistant), the same drafting tree (5 x 3, verify size 16) and the same engine build maximum for it (stock's `--max-verify-tree-size` and `--max-draft-tree-size` are set to 16 too; left at its default of 60, stock's INT4 GEMM would be tuned for 60 rows). Both engines were built from scratch by the container for this run. The optimised stack adds INT8 KV, bounded sliding-window KV with a 4 GiB host prefix cache, W4A8 prompt pass, suffix draft and the GELU fusion plugin. The target is an 8 GB card; the Orin has 32 GB, so this is evidence for speed and answer quality, not for the memory fit.
+#### Long context (prompts of the given length, greedy; cold = nothing to reuse, warm = same prompt again, needles = exact retrieval of 3 planted facts)
 
-| | stock | optimised | ratio |
+| prompt tokens | metric | stock | optimised |
+|---:|---|---:|---:|
+| 4,096 (actual 4,046) | cold time to first token, s | 5.69 | 4.10 |
+|  | cold prompt tokens/s | 711 | 988 |
+|  | warm time to first token, s | 0.29 | 1.04 |
+|  | decode tokens/s at this context | 25.9 | 36.1 |
+|  | needles correct of 3 | 3 | 3 |
+| 8,192 (actual 8,184) | cold time to first token, s | 12.73 | 8.56 |
+|  | cold prompt tokens/s | 643 | 956 |
+|  | warm time to first token, s | 12.58 | 1.14 |
+|  | decode tokens/s at this context | 24.8 | 38.9 |
+|  | needles correct of 3 | 2 | 2 |
+| 11,500 (actual 11,500) | cold time to first token, s | 18.66 | 12.51 |
+|  | cold prompt tokens/s | 616 | 919 |
+|  | warm time to first token, s | 18.57 | 12.45 |
+|  | decode tokens/s at this context | 23.5 | 35.0 |
+|  | needles correct of 3 | 3 | 3 |
+| 16,384 (actual 16,376) | cold time to first token, s | refused / failed | 18.60 |
+|  | cold prompt tokens/s | refused / failed | 881 |
+|  | warm time to first token, s | refused / failed | 18.52 |
+|  | decode tokens/s at this context | refused / failed | 33.8 |
+|  | needles correct of 3 | refused / failed | 2 |
+| 24,576 (actual 24,536) | cold time to first token, s | not reached | 30.11 |
+|  | cold prompt tokens/s | not reached | 815 |
+|  | warm time to first token, s | not reached | 29.99 |
+|  | decode tokens/s at this context | not reached | 37.2 |
+|  | needles correct of 3 | not reached | 2 |
+| 30,000 (actual 29,964) | cold time to first token, s | not reached | 38.63 |
+|  | cold prompt tokens/s | not reached | 776 |
+|  | warm time to first token, s | not reached | 38.51 |
+|  | decode tokens/s at this context | not reached | 31.2 |
+|  | needles correct of 3 | not reached | 2 |
+
+Long-context refusals / failures: stock 16384: RuntimeError no tokens streamed
+
+#### gemma4-e4b on orin: stock Edge-LLM vs optimised fork (2 rounds, medians)
+
+| | stock | optimised | speed-up |
 |---|---:|---:|---:|
-| Prefill, fresh ~1.5k-token prompt (cold), tok/s | 738 | 956 | 1.30x |
-| Same prompt again (warm, prefix reused), time to first token | 0.275 s | 0.406 s | **0.68x (optimised is slower)** |
-| Decode, first request of a prompt (cold), tok/s | 26.9 | 40.6 | 1.51x |
-| Decode, same prompt again (warm), tok/s | 27.2 | 50.6 | 1.86x |
-| HumanEval generation, tok/s | 35.9 | 70.5 | 1.96x |
-| HumanEval pass@1 (greedy), per round | 154, 151 / 164 | 150, 151 / 164 | equal within noise |
-| Replay of 60 recorded calls, seconds | 557.9 | 273.9 | 2.04x |
-| Replay output tokens | 10,092 | 10,275 | |
+| Prefill of a fresh ~1.5k-token prompt (cold), tokens/s (higher is better) | 1,403 | 2,423 | **1.73x** |
+| Same prompt again (warm, prefix reused), time to first token, seconds (lower is better) | 0.163 | 0.075 | **2.17x** |
+| Decode, first request of a prompt (cold), tokens/s (higher is better) | 31.7 | 89.8 | **2.84x** |
+| Decode, same prompt again (warm), tokens/s (higher is better) | 32.2 | 111.3 | **3.46x** |
+| Replay of 60 recorded requests, seconds (lower is better) | 511.0 | 103.7 | **4.93x** |
+| Replay output tokens in total (the stacks do not answer with the same length) | 27,844 | 10,242 |  |
+| HumanEval generation, tokens/s (higher is better) | 39.2 | 169.7 | **4.33x** |
 
-How to read it:
-* **The gain is smaller than on the E4B** and the 12B decode round is dominated by the INT4 weight reads (about 85% of the memory roofline after the tile fix), so there is less left for drafting and kernel work to win. This comparison also gives stock the same drafting tree.
-* **Warm prefill is slower than stock's.** The optimised stack restores a snapshot from pinned host memory (bounded sliding-window KV needs it to reuse anything), stock keeps the prefix in GPU pages. Both reuse the prefix (a cold 1.5k-token prompt takes about 2 s on stock, the warm one 0.28 s). It pays off on long shared prefixes and hurts on a 1.5k-token one; a smaller snapshot cost is open work.
-* The replay seconds are close to a fair measure here (output lengths within 2%).
-* The two stacks give the same answers on only 2 of 60 replay calls (mean text similarity 0.61): INT8 KV, W4A8 prompt pass, fused kernels. HumanEval is the quality check; the pass counts move by 2-4 between rounds on the same engine setup, so the 150-154 range is noise.
-* An earlier run of this table (2026-10-19, before the GELU plugin existed) used an optimised engine built for a maximum verify size of 20 and served at 16, so the INT4 GEMM ran 16 rows in a 32-row tile (half idle): it showed 58 tok/s on HumanEval generation. The engine is now built for 16 (builder stamps each engine with the pinned commit and model config and rebuilds on a mismatch).
+HumanEval pass@1 (greedy, public benchmark), per round: stock 143/164 / 141/164; optimised 139/164 / 133/164.
+
+Greedy answers identical to stock: 7/60 (mean text similarity 0.495). Quantised weights are the same; the optimised stack also uses an INT8 KV cache and fused kernels, so some answers differ in wording. Read the two answers of the first request in `results/`.
+
+#### Long context (prompts of the given length, greedy; cold = nothing to reuse, warm = same prompt again, needles = exact retrieval of 3 planted facts)
+
+| prompt tokens | metric | stock | optimised |
+|---:|---|---:|---:|
+| 2,048 (actual 2,016) | cold time to first token, s | 1.55 | 0.86 |
+|  | cold prompt tokens/s | 1,301 | 2,345 |
+|  | warm time to first token, s | 0.14 | 0.07 |
+|  | decode tokens/s at this context | 30.7 | 87.2 |
+|  | needles correct of 3 | 3 | 3 |
+| 4,096 (actual 4,088) | cold time to first token, s | 2.98 | 1.74 |
+|  | cold prompt tokens/s | 1,372 | 2,348 |
+|  | warm time to first token, s | 2.88 | 0.08 |
+|  | decode tokens/s at this context | 29.6 | 130.9 |
+|  | needles correct of 3 | 3 | 3 |
+| 8,192 (actual 8,180) | cold time to first token, s | 6.27 | 3.61 |
+|  | cold prompt tokens/s | 1,306 | 2,265 |
+|  | warm time to first token, s | 6.12 | 0.09 |
+|  | decode tokens/s at this context | 28.1 | 85.7 |
+|  | needles correct of 3 | 3 | 3 |
+
+#### qwen35-4b on orin: stock Edge-LLM vs optimised fork (2 rounds, medians)
+
+| | stock | optimised | speed-up |
+|---|---:|---:|---:|
+| Prefill of a fresh ~1.5k-token prompt (cold), tokens/s (higher is better) | 1,128 | 1,828 | **1.62x** |
+| Same prompt again (warm, prefix reused), time to first token, seconds (lower is better) | 1.237 | 0.053 | **23.13x** |
+| Decode, first request of a prompt (cold), tokens/s (higher is better) | 46.6 | 88.0 | **1.89x** |
+| Decode, same prompt again (warm), tokens/s (higher is better) | 47.5 | 88.0 | **1.85x** |
+| Replay of 60 recorded requests, seconds (lower is better) | 325.6 | 160.8 | **2.02x** |
+| Replay output tokens in total (the stacks do not answer with the same length) | 9,521 | 13,144 |  |
+| HumanEval generation, tokens/s (higher is better) | 64.5 | 118.0 | **1.83x** |
+
+HumanEval pass@1 (greedy, public benchmark), per round: stock 129/164 / 129/164; optimised 129/164 / 130/164.
+
+Greedy answers identical to stock: 12/60 (mean text similarity 0.623). Quantised weights are the same; the optimised stack also uses an INT8 KV cache and fused kernels, so some answers differ in wording. Read the two answers of the first request in `results/`.
+
+#### Long context (prompts of the given length, greedy; cold = nothing to reuse, warm = same prompt again, needles = exact retrieval of 3 planted facts)
+
+| prompt tokens | metric | stock | optimised |
+|---:|---|---:|---:|
+| 2,048 (actual 2,007) | cold time to first token, s | 1.91 | 1.13 |
+|  | cold prompt tokens/s | 1,052 | 1,779 |
+|  | warm time to first token, s | 1.78 | 0.05 |
+|  | decode tokens/s at this context | 43.7 | 88.3 |
+|  | needles correct of 3 | 3 | 3 |
+| 4,096 (actual 4,088) | cold time to first token, s | 3.79 | 2.20 |
+|  | cold prompt tokens/s | 1,079 | 1,858 |
+|  | warm time to first token, s | 3.63 | 0.06 |
+|  | decode tokens/s at this context | 44.5 | 84.3 |
+|  | needles correct of 3 | 3 | 3 |
+| 8,192 (actual 8,183) | cold time to first token, s | 7.65 | 4.46 |
+|  | cold prompt tokens/s | 1,069 | 1,835 |
+|  | warm time to first token, s | 7.40 | 0.07 |
+|  | decode tokens/s at this context | 43.3 | 77.6 |
+|  | needles correct of 3 | 3 | 3 |
+
+### RTX 4060 8 GB (`PROFILE=dgpu`), optimised arm only
+
+**Setup:** RTX 4060 8 GB (sm_89), `PROFILE=dgpu GPU_ARCH=89`, GPU clock locked at 2,460 MHz, CPU governor performance, poc main f792bab + c5d0f39, fork `dev` 2e02476, 2 rounds, medians. Gemma checkpoints and the Qwen AWQ checkpoint (64 samples) are the Orin's, copied unchanged (sha256 equal). The 12B uses the 4060 recipe: tree 16, INT4 drafter MLP + head, INT8 Q.K^T in prompt and decode attention, KV capacity 49,152.
+
+**Stock Edge-LLM did not run on this card for any of the three models** (same settings as the optimised arm): the stock server builds its engine and then fails at start with `CUDA runtime error in cudaMalloc(...): out of memory`; for the 12B its engine alone needs 7.07 GB of TensorRT activation memory at its 12,288-token input limit (stock has no chunked prefill, so the input limit is its whole context). Smaller contexts were tried, down to 2,048 tokens: 12B out of memory at 4,096 and 2,048; E4B out of memory at 8,192, 4,096 and 2,048, engine build fails at 6,144; Qwen engine build fails at 8,192, 6,144 and 4,096 (TensorRT cannot allocate an 8.1 GB scratch buffer), out of memory at 2,048 and at 10,240. So the table has an optimised column only; the fork features that make the models fit are the embedding table in host memory, chunked prefill, bounded sliding-window KV, INT8 KV and PLE, and stripped multimodal weights.
+
+**Note on the long-context warm rows:** the host prefix cache keeps one snapshot per 1,024-token prefill chunk, so five prompts of 30k+ tokens overflow its 16 GiB budget before the warm repeat; the warm time at 30k, 40k and 46k tokens therefore equals the cold time (a cache-size artefact, not a limit: `EDGELLM_SWA_PREFIX_CAPTURE_INTERVAL` on fork `dev` 2b67583 keeps 2.5-3x more prompts). The needle rows are 2/3 at most lengths from 8k up on the 12B (the misses are the model's extra-zero errors; with no stock arm there is nothing to compare them to).
+
+#### gemma4-12b on dgpu: stock Edge-LLM vs optimised fork (2 rounds, medians)
+
+| | stock | optimised | speed-up |
+|---|---:|---:|---:|
+| Prefill of a fresh ~1.5k-token prompt (cold), tokens/s (higher is better) | did not run | 1,776 |  |
+| Same prompt again (warm, prefix reused), time to first token, seconds (lower is better) | did not run | 0.212 |  |
+| Decode, first request of a prompt (cold), tokens/s (higher is better) | did not run | 73.3 |  |
+| Decode, same prompt again (warm), tokens/s (higher is better) | did not run | 89.0 |  |
+| Replay of 60 recorded requests, seconds (lower is better) | did not run | 141.5 |  |
+| Replay output tokens in total (the stacks do not answer with the same length) | did not run | 10,366 |  |
+| HumanEval generation, tokens/s (higher is better) | did not run | 123.5 |  |
+| GPU memory used, MiB | did not run | 7,739 |  |
+
+HumanEval pass@1 (greedy, public benchmark), per round: stock did not run; optimised 153/164 / 154/164.
+
+##### Long context (prompts of the given length, greedy; cold = nothing to reuse, warm = same prompt again, needles = exact retrieval of 3 planted facts)
+
+| prompt tokens | metric | stock | optimised |
+|---:|---|---:|---:|
+| 4,096 (actual 4,045) | cold time to first token, s | not reached | 2.36 |
+|  | cold prompt tokens/s | not reached | 1,711 |
+|  | warm time to first token, s | not reached | 0.54 |
+|  | decode tokens/s at this context | not reached | 61.4 |
+|  | needles correct of 3 | not reached | 3 |
+| 8,192 (actual 8,188) | cold time to first token, s | not reached | 4.87 |
+|  | cold prompt tokens/s | not reached | 1,680 |
+|  | warm time to first token, s | not reached | 0.58 |
+|  | decode tokens/s at this context | not reached | 85.2 |
+|  | needles correct of 3 | not reached | 2 |
+| 11,500 (actual 11,496) | cold time to first token, s | not reached | 7.13 |
+|  | cold prompt tokens/s | not reached | 1,613 |
+|  | warm time to first token, s | not reached | 0.19 |
+|  | decode tokens/s at this context | not reached | 67.5 |
+|  | needles correct of 3 | not reached | 3 |
+| 16,384 (actual 16,374) | cold time to first token, s | not reached | 10.41 |
+|  | cold prompt tokens/s | not reached | 1,573 |
+|  | warm time to first token, s | not reached | 0.65 |
+|  | decode tokens/s at this context | not reached | 63.8 |
+|  | needles correct of 3 | not reached | 2 |
+| 24,576 (actual 24,538) | cold time to first token, s | not reached | 16.54 |
+|  | cold prompt tokens/s | not reached | 1,484 |
+|  | warm time to first token, s | not reached | 0.71 |
+|  | decode tokens/s at this context | not reached | 61.2 |
+|  | needles correct of 3 | not reached | 2 |
+| 30,000 (actual 29,964) | cold time to first token, s | not reached | 21.13 |
+|  | cold prompt tokens/s | not reached | 1,418 |
+|  | warm time to first token, s | not reached | 21.10 |
+|  | decode tokens/s at this context | not reached | 62.7 |
+|  | needles correct of 3 | not reached | 2 |
+| 40,000 (actual 39,962) | cold time to first token, s | not reached | 30.10 |
+|  | cold prompt tokens/s | not reached | 1,327 |
+|  | warm time to first token, s | not reached | 30.08 |
+|  | decode tokens/s at this context | not reached | 55.7 |
+|  | needles correct of 3 | not reached | 2 |
+| 46,000 (actual 45,975) | cold time to first token, s | not reached | 35.89 |
+|  | cold prompt tokens/s | not reached | 1,281 |
+|  | warm time to first token, s | not reached | 36.11 |
+|  | decode tokens/s at this context | not reached | 56.8 |
+|  | needles correct of 3 | not reached | 2 |
+
+
+#### gemma4-e4b on dgpu: stock Edge-LLM vs optimised fork (2 rounds, medians)
+
+| | stock | optimised | speed-up |
+|---|---:|---:|---:|
+| Prefill of a fresh ~1.5k-token prompt (cold), tokens/s (higher is better) | did not run | 7,151 |  |
+| Same prompt again (warm, prefix reused), time to first token, seconds (lower is better) | did not run | 0.028 |  |
+| Decode, first request of a prompt (cold), tokens/s (higher is better) | did not run | 146.0 |  |
+| Decode, same prompt again (warm), tokens/s (higher is better) | did not run | 154.5 |  |
+| Replay of 60 recorded requests, seconds (lower is better) | did not run | 56.6 |  |
+| Replay output tokens in total (the stacks do not answer with the same length) | did not run | 10,290 |  |
+| HumanEval generation, tokens/s (higher is better) | did not run | 280.6 |  |
+| GPU memory used, MiB | did not run | 7,583 |  |
+
+HumanEval pass@1 (greedy, public benchmark), per round: stock did not run; optimised 137/164 / 136/164.
+
+##### Long context (prompts of the given length, greedy; cold = nothing to reuse, warm = same prompt again, needles = exact retrieval of 3 planted facts)
+
+| prompt tokens | metric | stock | optimised |
+|---:|---|---:|---:|
+| 2,048 (actual 2,027) | cold time to first token, s | not reached | 0.31 |
+|  | cold prompt tokens/s | not reached | 6,583 |
+|  | warm time to first token, s | not reached | 0.03 |
+|  | decode tokens/s at this context | not reached | 142.8 |
+|  | needles correct of 3 | not reached | 3 |
+| 4,096 (actual 4,089) | cold time to first token, s | not reached | 0.66 |
+|  | cold prompt tokens/s | not reached | 6,185 |
+|  | warm time to first token, s | not reached | 0.03 |
+|  | decode tokens/s at this context | not reached | 145.8 |
+|  | needles correct of 3 | not reached | 3 |
+| 8,192 (actual 8,182) | cold time to first token, s | not reached | 1.52 |
+|  | cold prompt tokens/s | not reached | 5,382 |
+|  | warm time to first token, s | not reached | 0.04 |
+|  | decode tokens/s at this context | not reached | 146.4 |
+|  | needles correct of 3 | not reached | 3 |
+
+
+#### qwen35-4b on dgpu: stock Edge-LLM vs optimised fork (2 rounds, medians)
+
+| | stock | optimised | speed-up |
+|---|---:|---:|---:|
+| Prefill of a fresh ~1.5k-token prompt (cold), tokens/s (higher is better) | did not run | 4,748 |  |
+| Same prompt again (warm, prefix reused), time to first token, seconds (lower is better) | did not run | 0.019 |  |
+| Decode, first request of a prompt (cold), tokens/s (higher is better) | did not run | 163.7 |  |
+| Decode, same prompt again (warm), tokens/s (higher is better) | did not run | 162.3 |  |
+| Replay of 60 recorded requests, seconds (lower is better) | did not run | 86.1 |  |
+| Replay output tokens in total (the stacks do not answer with the same length) | did not run | 13,006 |  |
+| HumanEval generation, tokens/s (higher is better) | did not run | 221.0 |  |
+| GPU memory used, MiB | did not run | 7,393 |  |
+
+HumanEval pass@1 (greedy, public benchmark), per round: stock did not run; optimised 128/164 / 128/164.
+
+##### Long context (prompts of the given length, greedy; cold = nothing to reuse, warm = same prompt again, needles = exact retrieval of 3 planted facts)
+
+| prompt tokens | metric | stock | optimised |
+|---:|---|---:|---:|
+| 2,048 (actual 2,008) | cold time to first token, s | not reached | 0.45 |
+|  | cold prompt tokens/s | not reached | 4,452 |
+|  | warm time to first token, s | not reached | 0.02 |
+|  | decode tokens/s at this context | not reached | 157.3 |
+|  | needles correct of 3 | not reached | 3 |
+| 4,096 (actual 4,088) | cold time to first token, s | not reached | 0.90 |
+|  | cold prompt tokens/s | not reached | 4,557 |
+|  | warm time to first token, s | not reached | 0.02 |
+|  | decode tokens/s at this context | not reached | 145.9 |
+|  | needles correct of 3 | not reached | 3 |
+| 8,192 (actual 8,182) | cold time to first token, s | not reached | 2.39 |
+|  | cold prompt tokens/s | not reached | 3,421 |
+|  | warm time to first token, s | not reached | 0.03 |
+|  | decode tokens/s at this context | not reached | 137.1 |
+|  | needles correct of 3 | not reached | 3 |
