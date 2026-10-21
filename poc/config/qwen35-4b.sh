@@ -17,5 +17,7 @@ SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_HYBRID_
 # If stock rejects --enable-context-reuse for this hybrid model, it runs without: that is an upstream feature gap (the fork's hybrid prefix reuse exists for
 # that reason), not a setting withheld from it; the README must say so next to the result.
 STOCK_TREE="--draft-top-k 1 --draft-step 3 --verify-tree-size 4"
-STOCK_ARGS="--max-input-len $MAXIN --max-kv-cache-capacity $CAP --enable-context-reuse --enable-auto-tool-choice $STOCK_TREE --max-verify-tree-size $TREE --max-draft-tree-size $TREE"
+# Stock refuses --enable-context-reuse on this hybrid model at startup ("Hybrid context reuse requires at least one recurrent snapshot slot", contextCacheCoordinator.cpp:916):
+# the upstream gap that the fork's hybrid prefix reuse exists for. So stock runs without prefix reuse; everything else is the optimised arm's setting.
+STOCK_ARGS="--max-input-len $MAXIN --max-kv-cache-capacity $CAP --enable-auto-tool-choice $STOCK_TREE --max-verify-tree-size $TREE --max-draft-tree-size $TREE"
 STOCK_SPEC='{"method":"mtp"}'
