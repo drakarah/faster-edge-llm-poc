@@ -67,10 +67,12 @@ quantise_qwen() {
   need_memory_gb 40
   step "INT4-AWQ with Edge-LLM's own quantiser"
   use_stack fast
-  local DEV=cuda SAMPLES=256
+  # 256 samples need more than the Orin's shared 30 GB pool with the current image (the quantiser was OOM-killed at 28.8 GB resident, twice); 64 fit. Override: QWEN_AWQ_SAMPLES.
+  local DEV=cuda SAMPLES=${QWEN_AWQ_SAMPLES:-64}
   [ "$PROFILE" = dgpu ] && { DEV=cpu; SAMPLES=16; }          # the 4B model does not fit calibration on an 8 GB card
   rm -rf $CKPT
-  EDGELLM_QUANT_MAX_LENGTH=256 python -m tensorrt_edgellm.scripts.quantize llm --model_dir $BASE --output_dir $CKPT \
+  # Unified memory is shared with the host: the AWQ search allocates 2.5 GiB tensors, so avoid allocator fragmentation (a run OOMed with 2.1 GiB reserved but unusable).
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True EDGELLM_QUANT_MAX_LENGTH=256 python -m tensorrt_edgellm.scripts.quantize llm --model_dir $BASE --output_dir $CKPT \
     --quantization int4_awq --lm_head_quantization int4_awq --device $DEV --num_samples $SAMPLES
 }
 
