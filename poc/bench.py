@@ -10,11 +10,14 @@ Workloads (all greedy, temperature 0):
   decode   a long free-text generation; completion tokens after the first / time between first and last token; reported cold (first
            request) and warm (same prompt again) separately
   humaneval  optional (--humaneval N): the public HumanEval benchmark, pass@1 and generation tokens/s (poc/humaneval.py)
+  longctx  optional (--longctx 4096,16384,...): prompts of about that many tokens (distinct records, a unique nonce in front): cold time to
+           first token and prompt tokens/s, the same prompt again (warm), needle retrieval at 10/50/90% depth (exact match), and decode
+           tokens/s with the long context in the KV cache; a stack that refuses or fails a length is recorded as such and skipped for longer ones
   replay   the first N of 396 recorded requests (structured JSON answers, tool-style prompts), sent one after another
            in recorded order so prefix reuse sees a realistic sequence; total wall time
 """
 import humaneval
-import argparse, difflib, glob, json, os, statistics, subprocess, sys, time, urllib.error, urllib.request, uuid
+import argparse, difflib, glob, json, os, re, statistics, subprocess, sys, time, urllib.error, urllib.request, uuid
 
 DECODE_PROMPT = ("Write a detailed essay of at least 600 words on how a bicycle gearbox works, from the pedal "
                  "to the wheel. Use continuous prose, no lists.")
@@ -104,6 +107,59 @@ def replay(url, workload, calls):
             "answers": answers}
 
 
+RECORD = "Record {i}: the valve in bay {i} is set to {v} bar. "
+
+
+def record_value(i):
+    return (i * 37) % 900 + 100
+
+
+def long_prompt(n, nonce, question):
+    body = "".join(RECORD.format(i=i, v=record_value(i)) for i in range(1, n + 1))
+    return f"[{nonce}] Read the following maintenance records.\n{body}\n\n{question}"
+
+
+def longctx(url, lengths):
+    """One entry per target length: cold TTFT, prompt tokens, warm TTFT, needles correct of 3, decode tok/s. The record count is
+    calibrated against the server's own prompt token count so every stack sees (about) the same number of tokens."""
+    out = {}
+    per = 17.0  # tokens per record, refined after the first request
+    for target in lengths:
+        entry = {}
+        try:
+            n = max(8, int(target / per))
+            q = f"What is the valve in bay {n // 2} set to? Answer with the number only."
+            _, _, _, pt = stream_chat(url, [{"role": "user", "content": long_prompt(n, uuid.uuid4(), q)}], 1)  # calibration
+            per = pt / n
+            n = max(8, int(target / per))
+            colds, tokens, ok, first_msgs = [], 0, 0, None
+            for depth in (0.1, 0.5, 0.9):
+                k = max(1, int(n * depth))
+                msgs = [{"role": "user", "content": long_prompt(n, uuid.uuid4(), f"What is the valve in bay {k} set to? Answer with the number only.")}]
+                first_msgs = first_msgs or msgs
+                body = {"model": "local", "messages": msgs, "max_tokens": 12, "temperature": 0}
+                t0 = time.perf_counter()
+                with post(url, body) as f:
+                    resp = json.loads(f.read())
+                colds.append(time.perf_counter() - t0)
+                tokens = (resp.get("usage") or {}).get("prompt_tokens", 0)
+                ok += str(record_value(k)) in re.findall(r"\d+", content(resp))[:1]
+            entry.update({"prompt_tokens": tokens, "cold_s": statistics.median(colds), "cold_tok_s": tokens / statistics.median(colds), "needles_ok": ok,
+                          "warm_ttft_s": stream_chat(url, first_msgs, 1)[0]})
+            essay = [{"role": "user", "content": long_prompt(n, uuid.uuid4(), "Now write an essay of at least 300 words on how a pressure valve works. Use continuous prose, no lists.")}]
+            _, dt, ct, _ = stream_chat(url, essay, 300)
+            entry["decode_tok_s"] = (ct - 1) / dt
+        except Exception as e:  # refused (HTTP 4xx/5xx), out of memory, server gone: record it and do not try longer prompts
+            body = e.read()[:200].decode(errors="replace") if isinstance(e, urllib.error.HTTPError) else ""
+            entry["error"] = f"{type(e).__name__} {e} {body}".strip()[:300]
+            out[str(target)] = entry
+            print(f"longctx {target}: {entry['error']}", flush=True)
+            break
+        out[str(target)] = entry
+        print(f"longctx {target}: {entry}", flush=True)
+    return out
+
+
 def gpu_memory_mib():
     try:
         v = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
@@ -126,6 +182,9 @@ def cmd_run(a):
         res.update(humaneval.run_humaneval(a.url, os.path.join(os.path.dirname(a.out), "humaneval-problems.json"), a.humaneval))
         print(f"{a.label}: HumanEval pass@1 {res['he_pass']}/{res['he_total']}, {res['he_tok_s']:.1f} tok/s")
     json.dump(res, open(a.out, "w"))
+    if a.longctx:
+        res["longctx"] = longctx(a.url, [int(x) for x in a.longctx.split(",") if x])
+        json.dump(res, open(a.out, "w"))
     print(f"{a.label}: prefill {res['prefill_tok_s']:.0f} tok/s cold / warm TTFT {res['prefill_warm_ttft_s']*1000:.0f} ms, decode {res['decode_cold_tok_s']:.1f} cold / {res['decode_warm_tok_s']:.1f} warm tok/s, "
           f"replay-{r['calls']} {r['seconds']:.1f} s" + (f", {len(r['errors'])} requests refused" if r["errors"] else ""))
 
@@ -177,6 +236,26 @@ def cmd_report(a):
         out += ["", f"Greedy answers identical to stock: {sim[0]}/{sim[1]} (mean text similarity {sim[2]:.3f}). "
                 "Quantised weights are the same; the optimised stack also uses an INT8 KV cache and fused kernels, so some "
                 "answers differ in wording. Read the two answers of the first request in `results/`."]
+    lc = sorted({int(k) for rs in (stock, fast) for r in rs for k in r.get("longctx", {})})
+    if lc:
+        def cell(rs, L, key, fmt):
+            vals = [r["longctx"][str(L)] for r in rs if str(L) in r.get("longctx", {})]
+            good = [v[key] for v in vals if key in v]
+            if good:
+                return fmt.format(statistics.median(good))
+            return "refused / failed" if vals else "not reached"
+        out += ["", "#### Long context (prompts of the given length, greedy; cold = nothing to reuse, warm = same prompt again, needles = exact retrieval of 3 planted facts)", "",
+                "| prompt tokens | metric | stock | optimised |", "|---:|---|---:|---:|"]
+        for L in lc:
+            ptoks = med([r.get("longctx", {}).get(str(L), {}) for r in fast], "prompt_tokens")
+            for name, key, fmt in (("cold time to first token, s", "cold_s", "{:.2f}"), ("cold prompt tokens/s", "cold_tok_s", "{:,.0f}"),
+                                   ("warm time to first token, s", "warm_ttft_s", "{:.2f}"), ("decode tokens/s at this context", "decode_tok_s", "{:.1f}"),
+                                   ("needles correct of 3", "needles_ok", "{:.0f}")):
+                label = f"{L:,}" + (f" (actual {ptoks:,.0f})" if ptoks and key == "cold_s" else "")
+                out.append(f"| {label if key == 'cold_s' else ''} | {name} | {cell(stock, L, key, fmt)} | {cell(fast, L, key, fmt)} |")
+        errs = sorted({f"{n} {L}: {v['error']}" for n, rs in (("stock", stock), ("optimised", fast)) for r in rs for L, v in r.get("longctx", {}).items() if "error" in v})
+        if errs:
+            out += ["", "Long-context refusals / failures: " + "; ".join(errs[:6])]
     text = "\n".join(out)
     print(text)
     open(os.path.join(a.results, f"{a.model}-{a.profile}.md"), "w").write(text + "\n")
@@ -187,6 +266,7 @@ def main():
     r = sub.add_parser("run"); r.add_argument("--url", required=True); r.add_argument("--label", required=True)
     r.add_argument("--out", required=True); r.add_argument("--calls", type=int, default=60)
     r.add_argument("--humaneval", type=int, default=0, help="HumanEval problems to run (0 = skip, max 164)")
+    r.add_argument("--longctx", default="", help="comma-separated target prompt lengths in tokens for the long-context test (empty = skip)")
     r.add_argument("--workload", default=os.path.join(os.path.dirname(__file__), "data", "workload.jsonl"))
     q = sub.add_parser("report"); q.add_argument("--results", required=True)
     q.add_argument("--model", required=True); q.add_argument("--profile", required=True)

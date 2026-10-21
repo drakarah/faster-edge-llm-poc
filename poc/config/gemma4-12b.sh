@@ -1,5 +1,7 @@
 # Gemma 4 12B (google/gemma-4-12B-it) with its MTP assistant. Long context on small memory: bounded sliding-window KV, INT8 KV.
 KIND=gemma4
+# long-context test (tokens): the optimised engine holds 32,768; the stock engine only the 12,288 of its replay, so it refuses the longer prompts (recorded, not an error)
+LONGCTX_DEFAULT=4096,8192,11500,16384,24576,30000
 BASE_REPO=google/gemma-4-12B-it-qat-w4a16-ct
 ASSIST_REPO=google/gemma-4-12B-it-assistant
 GPTQ_SAMPLES=128

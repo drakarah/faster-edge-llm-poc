@@ -36,6 +36,7 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 | `HF_TOKEN` | token | needed for Gemma only |
 | `BENCH_CALLS`, `BENCH_ROUNDS` | 60, 2 | replayed requests per round, rounds per stack |
 | `BENCH_HUMANEVAL` | 164 | HumanEval problems per run (0 skips); public benchmark, pass@1 and tokens/s |
+| `BENCH_LONGCTX` | per model (gemma4-12b: `4096,8192,11500,16384,24576,30000`; e4b and qwen: `2048,4096,8192`); empty skips | long-context test: prompt lengths in tokens, ascending. Per length: cold time to first token and prompt tokens/s (a unique nonce defeats prefix reuse), the same prompt again (warm), exact retrieval of 3 planted facts (10/50/90% depth), and decode tokens/s with that context in the KV cache. A stack that refuses or fails a length is recorded as such and not tried on longer ones (stock builds its engine for the replay's context only: no chunked prefill, no bounded sliding-window KV, so on the 12B it stops at 12,288 tokens). Both engines are built for a fixed capacity (`CAP` in `config/`): lengths above it are refused by design |
 | `DATA_DIR`, `PORT`, `BUILD_JOBS` | `./data`, 8000, 8 | |
 
 `PROFILE` picks the build target and the tuned settings that differ between the two GPU classes (all in `poc/config/`): a Jetson shares one DRAM between CPU and GPU, so host-memory tricks are off there, and FP16-accumulate prefill (twice the tensor rate on GeForce parts) is on only for `dgpu`.

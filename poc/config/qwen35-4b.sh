@@ -1,5 +1,6 @@
 # Qwen3.5-4B (Qwen/Qwen3.5-4B): hybrid model (gated delta-net + attention) with its built-in MTP layer.
 KIND=qwen
+LONGCTX_DEFAULT=2048,4096,8192   # both engines hold 10,240 tokens
 BASE_REPO=Qwen/Qwen3.5-4B
 ASSIST_REPO=
 MAXIN=10240; CAP=10240; POOL=320; TREE=12

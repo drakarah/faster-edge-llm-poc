@@ -166,7 +166,7 @@ bench() {
       step "round $r: stock"
       start_stock $BENCH_PORT
       if wait_ready $BENCH_PORT $SERVER_PID 1800; then
-        python $POC/bench.py run --url http://localhost:$BENCH_PORT --label stock --calls $BENCH_CALLS --humaneval $BENCH_HUMANEVAL \
+        python $POC/bench.py run --url http://localhost:$BENCH_PORT --label stock --calls $BENCH_CALLS --humaneval $BENCH_HUMANEVAL --longctx "$BENCH_LONGCTX" \
           --out $RESULT_DIR/$MODEL-$PROFILE-stock-round$r.json
       else echo "stock server did not start; skipping"; fi
       stop_server
@@ -174,7 +174,7 @@ bench() {
     step "round $r: optimised"
     start_fast $BENCH_PORT
     wait_ready $BENCH_PORT $SERVER_PID 1800 || { tail -n 30 $LOG_DIR/$MODEL-$PROFILE-fast-server.log; die "optimised server did not start"; }
-    python $POC/bench.py run --url http://localhost:$BENCH_PORT --label fast --calls $BENCH_CALLS --humaneval $BENCH_HUMANEVAL \
+    python $POC/bench.py run --url http://localhost:$BENCH_PORT --label fast --calls $BENCH_CALLS --humaneval $BENCH_HUMANEVAL --longctx "$BENCH_LONGCTX" \
       --out $RESULT_DIR/$MODEL-$PROFILE-fast-round$r.json
     stop_server
   done

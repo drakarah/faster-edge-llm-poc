@@ -1,5 +1,6 @@
 # Gemma 4 E4B (google/gemma-4-E4B-it) with its MTP assistant.
 KIND=gemma4
+LONGCTX_DEFAULT=2048,4096,8192   # both engines hold 10,240 tokens; set BENCH_LONGCTX and rebuild with a larger capacity to go further
 BASE_REPO=google/gemma-4-E4B-it-qat-w4a16-ct          # Google's QAT checkpoint (group 32): the quantiser's starting point
 ASSIST_REPO=google/gemma-4-E4B-it-assistant
 GPTQ_SAMPLES=256
