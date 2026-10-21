@@ -99,6 +99,10 @@ build_fast() {
   need_memory_gb 28
   rm -rf $FAST; mkdir -p $FAST
   local DRAFT=""; [ -n "$ASSIST_REPO" ] && DRAFT="--mtp-draft-dir $ASSIST"
+  if [ "${DRAFTER_INT4_MLP:-0}" = 1 ]; then   # INT4 MLP of the assistant (the stock arm keeps the original FP16 assistant)
+    [ -f $CKPT_DIR/assistant-int4mlp/model.safetensors ] || { step "quantise the assistant MLP to INT4"; python $STACK_ROOT/scripts/quantize_gemma4_assistant.py $ASSIST $CKPT_DIR/assistant-int4mlp --mlp-only; }
+    DRAFT="--mtp-draft-dir $CKPT_DIR/assistant-int4mlp"
+  fi
   env $EXPORT_ENV python -m tensorrt_edgellm.scripts.export $CKPT $FAST/onnx $EXPORT_ARGS $DRAFT 2>&1 | tee $LOG_DIR/$MODEL-$PROFILE-export.log | tail -n 5
   step "optimised stack: engines"
   export EDGELLM_XQA_MULTI_BLOCK=auto                       # split-KV decode attention, sized from the GPU's SM count

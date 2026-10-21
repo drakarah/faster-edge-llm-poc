@@ -13,8 +13,14 @@ SERVE_ARGS="--draft-top-k 6 --draft-step 3 --verify-tree-size 20 --tool-call-par
 # verify tree of 20 is padded to a 32-row tile (37.5% idle rows, the tensor cores are the limit), a tree of 16 fits one 16-row tile. Measured on the
 # Orin (same weights, replay of 60 recorded calls, HumanEval): decode round 72.8 -> 60.7 ms, -16% per output token for 3.5% fewer tokens per round,
 # replay 327 -> 295 s, HumanEval unchanged. Not measured on the RTX 4060 (its tree sweep, tree 20, predates this), so the dgpu profile keeps 20.
+# Drafter in INT4 (Orin, measured on top of tree 16): the candidate head scores its 32k fixed candidates with an INT4 GEMM (export switch) and the assistant's
+# MLP is INT4 (RTN, group 128; q/o stay bf16, quantising them lost 4% acceptance). The MLP step alone: decode round -4.0%, per output token -3.3%, replay-60 -2.1% wall,
+# HumanEval unchanged (148-149 / 164 against 148); the head step adds -0.7% per token; draft engine 378 -> 179 MB. Not measured on the RTX 4060 yet, so the dgpu profile keeps the FP16 drafter.
+DRAFTER_INT4_MLP=0
 if [ "$PROFILE" = orin ]; then
   TREE=16
+  DRAFTER_INT4_MLP=1
+  EXPORT_ENV="$EXPORT_ENV EDGELLM_GEMMA4_DRAFT_HEAD_INT4=1"
   SERVE_ARGS="--draft-top-k 5 --draft-step 3 --verify-tree-size 16 --tool-call-parser gemma4"
 fi
 SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MTP_SUFFIX_DRAFT=19 EDGELLM_MTP_SUFFIX_MIN=3 EDGELLM_MTP_SUFFIX_PROMPT=16384"
