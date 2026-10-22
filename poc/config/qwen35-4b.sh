@@ -3,12 +3,17 @@ KIND=qwen
 LONGCTX_DEFAULT=2048,4096,8192   # both engines hold 10,240 tokens
 BASE_REPO=Qwen/Qwen3.5-4B
 ASSIST_REPO=
+# MAXIN = CAP: one prompt pass can take the whole context (stock cannot chunk; this profile gives both arms the same limits). The reason for 10,240 itself is not recorded: it is a default, not a measured limit.
 MAXIN=10240; CAP=10240; POOL=320; TREE=12
 EXPORT_ENV=""
 EXPORT_ARGS="--mtp --draft-reduced-vocab-dir $POC/data/vocab/qwen35"
 INT8_EMBEDDINGS=0
 if [ "$PROFILE" = orin ]; then SNAP=1610612736; else SNAP=536870912; fi        # recurrent-state snapshot pool for prefix reuse (bytes)
+# Tree: 1 candidate, 3 steps, 4 verify nodes (a chain). Chosen for this model earlier; the reason is not recorded here and it was not re-swept with the current engine.
+# The two pool-bytes flags size the recurrent-state snapshots (1.5 GB Orin / 0.5 GB dgpu) and partial-KV snapshots (128 MB) that make prefix reuse work for a hybrid model.
 SERVE_ARGS="--draft-top-k 1 --draft-step 3 --verify-tree-size 4 --enable-context-reuse --context-cache-recurrent-snapshot-pool-bytes $SNAP --context-cache-partial-kv-snapshot-pool-bytes 134217728 --tool-call-parser generic"
+# HYBRID_DIVERGENCE_CHECKPOINT=256: checkpoint the recurrent state every 256 tokens so a hybrid model can reuse cross-request prefixes (replay-396 -34%, upstream refuses it).
+# GDN_CHUNK_PREFILL=1: chunked prompt pass for the gated delta-net layers. INT4_GEMV_MAX_M=1 (Orin): GEMM from 2 tokens (+11% decode).
 SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_HYBRID_DIVERGENCE_CHECKPOINT=256 EDGELLM_GDN_CHUNK_PREFILL=1"
 [ "$PROFILE" = orin ] && SERVE_ENV="$SERVE_ENV EDGELLM_INT4_GEMV_MAX_M=1"
 # Stock gets exactly the optimised arm's settings where it has the same knob: drafting tree (top-k 1, step 3, verify 4), the engine's build maximum for the

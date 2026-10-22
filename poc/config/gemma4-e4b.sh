@@ -7,10 +7,15 @@ GPTQ_SAMPLES=256
 KV_SCALES=$POC/data/gemma4-e4b-int8-kv-scales.json
 # --- optimised stack ---
 MAXIN=2048; CAP=10240; POOL=320; TREE=12              # engine: prompt tokens per pass, KV capacity, KV pool pages (prefix reuse), max verify tree
+# Export switches (README rows have the measurements): GELU_PLUGIN = fused GELU(gate)*up kernel (prompt passes -11%); FUSE_GEMMA4_INT4 = fused q+k+v and gate+up INT4 GEMMs (decode +7%);
+# INT8_KV_SCALES = INT8 KV cache with per-layer scales (calibrated, $KV_SCALES); SPARSE_DRAFT_LOGITS = the drafter returns 4,096 candidates instead of a 262,144-entry row (about -1% per token).
 EXPORT_ENV="EDGELLM_GEMMA4_GELU_PLUGIN=1 EDGELLM_FUSE_GEMMA4_INT4=1 EDGELLM_INT8_KV_SCALES=$KV_SCALES EDGELLM_GEMMA4_SPARSE_DRAFT_LOGITS=1"
 EXPORT_ARGS="--externalize-weights int4_ffn --mtp"
-INT8_EMBEDDINGS=1
+INT8_EMBEDDINGS=1           # token and per-layer embedding tables stored as INT8 rows: GPU 11.1 -> 7.78 GB, no speed or quality change by design
+# Tree 2 x 5 with 12 verify nodes: tuned on replayed requests (README row "Tree shape and size", -7% to -10% against 3 x 2 / 8). --enable-context-reuse + POOL=320: prefix reuse for the replay's shared prompts.
 SERVE_ARGS="--draft-top-k 2 --draft-step 5 --verify-tree-size 12 --enable-context-reuse"
+# FORCE_GREEDY: the MTP tree verifies greedily only. JSON_MAX_WHITESPACE: bounds whitespace runs in constrained JSON. SUFFIX_DRAFT=6 / MIN=2: suffix draft merged into the verify tree (replay-396 -11.9%).
+# INT4_GEMV_MAX_M=1 (Orin): on the Orin the tensor-core GEMM beats the GEMV from 2 tokens, upstream switches at 4 (+11% decode). GRAMMAR_CACHE_MB (dgpu): size of the grammar cache; not measured separately.
 SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MTP_SUFFIX_DRAFT=6 EDGELLM_MTP_SUFFIX_MIN=2"
 [ "$PROFILE" = orin ] && SERVE_ENV="$SERVE_ENV EDGELLM_INT4_GEMV_MAX_M=1"
 [ "$PROFILE" = dgpu ] && SERVE_ENV="$SERVE_ENV EDGELLM_GRAMMAR_CACHE_MB=4096"
