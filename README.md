@@ -505,3 +505,56 @@ HumanEval pass@1 (greedy, public benchmark), per round: stock did not run; optim
 |  | warm time to first token, s | not reached | 0.03 |
 |  | decode tokens/s at this context | not reached | 137.1 |
 |  | needles correct of 3 | not reached | 3 |
+
+#### Gemma 4 26B-A4B on the RTX 4060 8 GB (2026-10-22, optimised arm only, engine built by hand)
+
+**This engine is not built by `PROFILE=dgpu MODEL=gemma4-26b`** (the 26B profile in this repo is Orin only). The 4060 numbers come from the same `bench.py` and `workload.jsonl` (poc `474d349`, unedited, same flags: 60 calls, HumanEval 164, long context 2,048 / 4,096 / 7,500, 2 rounds with a server restart), against an engine built with the research repo's scripts on fork `dev` content of `481a34c`. The two 26B result sets are therefore **not a hardware ranking**: the engines differ, each chosen for its box.
+
+| | Orin (this repo's profile) | RTX 4060 8 GB (hand-built engine) |
+|---|---|---|
+| Dense part (attention, dense MLP, lm_head) | FP16 | INT4 (GPTQ) |
+| Experts | INT4 in unified memory | INT4, streamed over PCIe from host RAM, 45 device-cache slots per layer, chunked prefetch ring |
+| KV cache | FP16, bounded sliding window | INT8, bounded sliding window |
+| Speculative decoding | MTP drafter, verify tree 16, suffix draft | none (MTP loses on this box: the drafter's extra expert fetches cost more than they save) |
+| Prefix cache | 4 GiB host | 4 GiB host |
+| Replay of 60 requests, seconds (lower is better) | **246.0** | **323.8** |
+| HumanEval pass@1 of 164 (per round) | 160 / 157 | 153 / 155 |
+| Decode cold / warm, tokens/s (higher is better) | 34.4 / 48.2 | 54.1 / 55.6 |
+| Prefill of a fresh 1.5k prompt, tokens/s (higher is better) | 1,556 | 992 |
+| Needles at 2k / 4k / 7.5k (3 planted facts) | 3 / 3 / 3 | 3 / 3 / 3 |
+| GPU memory | engine in unified memory | 7,581 MiB |
+
+The 4060's retrieval check here (3 needles) does not resolve the retrieval cost of dense INT4 that the research repo measured with 8 independent prompts per length (2k tokens: Orin dense INT4 6 of 8 prompts all-3 against 8 of 8 for FP16 dense). Full 4060 report:
+
+| | optimised |
+|---|---:|
+| Prefill of a fresh ~1.5k-token prompt (cold), tokens/s (higher is better) | 992 |
+| Same prompt again (warm, prefix reused), time to first token, seconds (lower is better) | 1.361 |
+| Decode, first request of a prompt (cold), tokens/s (higher is better) | 54.1 |
+| Decode, same prompt again (warm), tokens/s (higher is better) | 55.6 |
+| Replay of 60 recorded requests, seconds (lower is better) | 323.8 |
+| Replay output tokens in total (the stacks do not answer with the same length) | 9,598 |
+| HumanEval generation, tokens/s (higher is better) | 35.3 |
+| GPU memory used, MiB | 7,581 |
+
+HumanEval pass@1 (greedy, public benchmark), per round: optimised 153/164 / 155/164.
+
+#### Long context (prompts of the given length, greedy; cold = nothing to reuse, warm = same prompt again, needles = exact retrieval of 3 planted facts)
+
+| prompt tokens | metric | optimised |
+|---:|---|---:|
+| 2,048 (actual 2,011) | cold time to first token, s | 1.51 |
+|  | cold prompt tokens/s | 1,333 |
+|  | warm time to first token, s | 1.40 |
+|  | decode tokens/s at this context | 54.1 |
+|  | needles correct of 3 | 3 |
+| 4,096 (actual 4,092) | cold time to first token, s | 1.67 |
+|  | cold prompt tokens/s | 2,455 |
+|  | warm time to first token, s | 1.54 |
+|  | decode tokens/s at this context | 54.8 |
+|  | needles correct of 3 | 3 |
+| 7,500 (actual 7,482) | cold time to first token, s | 3.49 |
+|  | cold prompt tokens/s | 2,144 |
+|  | warm time to first token, s | 1.76 |
+|  | decode tokens/s at this context | 53.7 |
+|  | needles correct of 3 | 3 |
