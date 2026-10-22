@@ -14,8 +14,8 @@ BASE_REPO=google/gemma-4-26B-A4B-it-qat-q4_0-unquantized
 ASSIST_REPO=google/gemma-4-26B-A4B-it-assistant
 GPTQ_SAMPLES=0          # no GPTQ calibration in this profile (experts: RTN on the QAT grid, dense part: FP16)
 KV_SCALES=""            # KV cache stays FP16: INT8 KV scales exist (docs repo results/g26_int8_kv_scales.json) but are not measured on the Orin yet
-# MAXIN: prompt tokens per prefill pass (longer prompts are chunked); also the unit of prefix reuse. 2,048 was chosen, not swept.
-# CAP: KV capacity. 8,192 was chosen, not swept: the engine is 17-18 GB and the 4 GiB host cache comes out of the same 32 GB; longer was not tried. POOL=0: no extra KV pool pages,
+# MAXIN: prompt tokens per prefill pass (longer prompts are chunked); also the unit of prefix reuse. CAP: KV capacity. Both come from the RTX 4060 profile of this model (METRICS 109: build at maxInputLen 2048 / KV 8,192 works
+# unchanged; on the 8 GB card maxInputLen 4,096 + KV 8,192 loads and 8,192 + 16,384 does not). The Orin is not limited that way, but MAXIN and CAP were not swept here; the engine is 17-18 GB and the 4 GiB host cache comes out of the same 32 GB. POOL=0: no extra KV pool pages,
 # prefix reuse comes from the host-resident cache (SERVE_ENV) instead of the full-KV pool.
 # TREE: verify-tree size 16 = one 16-row tile of the INT4/Marlin GEMMs on the Orin (see the 12B config for the tile-ladder measurement); a 26B tree sweep was started, not finished.
 MAXIN=2048; CAP=8192; POOL=0; TREE=16
