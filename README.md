@@ -32,7 +32,7 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 | variable | values | |
 |---|---|---|
 | `PROFILE` | `orin` (default), `dgpu` | `orin`: Jetson AGX Orin (sm_87). `dgpu`: discrete GPU, x86_64 or arm64; set `GPU_ARCH` (default 89 = RTX 40-series) |
-| `MODEL` | `gemma4-e4b` (default), `gemma4-12b`, `qwen35-4b`, `gemma4-26b` (Orin only, optimised arm only: stock Edge-LLM cannot load an engine built by the fork nor export the 51 GB checkpoint on 32 GB) | the models we measured |
+| `MODEL` | `gemma4-e4b` (default), `gemma4-12b`, `qwen35-4b`, `gemma4-26b` (optimised arm only: stock Edge-LLM cannot load an engine built by the fork nor export the 51 GB checkpoint in 32 GB of RAM; `PROFILE=dgpu` uses `config/gemma4-26b.dgpu.sh` and the dgpu pin, and has not been run end to end from a clean data dir yet) | the models we measured |
 | `HF_TOKEN` | token | needed for Gemma only |
 | `BENCH_CALLS`, `BENCH_ROUNDS` | 60, 2 | replayed requests per round, rounds per stack |
 | `BENCH_HUMANEVAL` | 164 | HumanEval problems per run (0 skips); public benchmark, pass@1 and tokens/s |
@@ -188,7 +188,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 
 ## Results
 
-> **Pin note (2026-10-22, updated):** the image now pins the fork's `dev` at `ff5e1fe`: `07382e4` plus the RTX 4060 session's merge of its MoE expert cache, host-pinned expert staging and prefill overlap (all off unless an env variable switches them on, and aimed at experts streamed over PCIe, so they should do nothing on the Orin's unified memory; the 26B run below was done on this pin: it ran with all of them unset and gave the expected numbers, which is consistent with a no-op, though it is not an A/B against `07382e4`). `07382e4` is `2e02476` plus six commits that change nothing for the three models below (an opt-in prefix-snapshot interval, the fix for a chunked prompt that ends in a one-token pass, and the 26B-A4B additions: the 8-row Marlin block threshold and layer-wise expert quantisation, both off unless a model's config sets them). The three result tables below were measured at `2e02476` (INT4 drafter head and MLP for the 12B on the Orin, W4A8 stage 4, split-K 3/5 decode variants, and the optional INT8 Q.K^T decode attention that only the 4060 profile switches on). The result tables below were measured at that earlier pin with the PoC files of commit `c5d0f39` (the Orin image was built from the Dockerfile of `3eeb42e`; the only difference, a dgpu-only line fixed in `6cf1fd2`, is empty for `PROFILE=orin`). Later commits change only this README. Results from the earlier pin `e4fd0ef` (2026-10-19) are replaced.
+> **Pin note (2026-10-22, updated):** the image now pins the fork's `dev` at `ff5e1fe`: `07382e4` plus the RTX 4060 session's merge of its MoE expert cache, host-pinned expert staging and prefill overlap (all off unless an env variable switches them on, and aimed at experts streamed over PCIe, so they should do nothing on the Orin's unified memory). `07382e4` is `2e02476` plus six commits that change nothing for the three models below (an opt-in prefix-snapshot interval, the fix for a chunked prompt that ends in a one-token pass, and the 26B-A4B additions: the 8-row Marlin block threshold and layer-wise expert quantisation, both off unless a model's config sets them). The three result tables below were measured at `2e02476` (INT4 drafter head and MLP for the 12B on the Orin, W4A8 stage 4, split-K 3/5 decode variants, and the optional INT8 Q.K^T decode attention that only the 4060 profile switches on). The result tables below were measured at that earlier pin with the PoC files of commit `c5d0f39` (the Orin image was built from the Dockerfile of `3eeb42e`; the only difference, a dgpu-only line fixed in `6cf1fd2`, is empty for `PROFILE=orin`). Later commits change only this README. Results from the earlier pin `e4fd0ef` (2026-10-19) are replaced.
 
 ### Jetson AGX Orin 32 GB, 2026-10-21/22 (GPU pinned at 930 MHz, 2 rounds, medians)
 
@@ -202,6 +202,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 * **HumanEval uses a 1024-token answer cap.** On the E4B most of the optimised arm's lower pass count comes from answers cut off at that cap (failures not ending in a closed code block: stock 7 and 9, optimised 11 and 18 across the two rounds; a proxy, `finish_reason` is not recorded), and the optimised arm varies more between rounds (8 problems flip between its two rounds, 2 for stock). With a 4096-token cap an earlier A/B showed no truncation and mean lengths of 414 vs 409 tokens. We have not re-run the E4B pair with a larger cap.
 * **Needle retrieval (3 planted facts) is 2 of 3 at several lengths on both arms** (stock 8,192 tokens, optimised 8,192 and up to 30,000 on the 12B); not investigated.
 * The replay output lengths differ between the stacks (the stock stack pads structured JSON with long whitespace runs on the E4B and Qwen), so tokens per second is the fair speed number there and the replay seconds mix speed with answer length.
+* **The 26B has no stock arm and its two engines differ per machine** (Orin: FP16 attention, dense MLP and lm_head, INT4 experts, FP16 bounded KV, MTP tree 16; RTX 4060: INT4 dense part, INT8 KV, experts streamed from host memory, no MTP), so the two 26B tables are not a hardware comparison. On the Orin the BF16 base checkpoint was copied from the 4060 box instead of downloaded. The decode rate in its long-context rows is a short answer drafted from the prompt, not a steady rate.
 
 #### gemma4-12b on orin: stock Edge-LLM vs optimised fork (2 rounds, medians)
 
@@ -328,11 +329,7 @@ Greedy answers identical to stock: 12/60 (mean text similarity 0.623). Quantised
 |  | decode tokens/s at this context | 43.3 | 77.6 |
 |  | needles correct of 3 | 3 | 3 |
 
-#### Gemma 4 26B-A4B on the Jetson AGX Orin (2026-10-22, pin `ff5e1fe`, optimised arm only)
-
-Run from a clean data dir through the compose `builder` and `bench` services (re-shard 2 min, export 11 min, engine builds 6 min, then the bench; 23 minutes for the whole builder). **The BF16 base checkpoint was copied from another machine instead of downloaded** (the Orin's Wi-Fi gave 6.5 MB/s; same files, `rsync -c` verified), so the download stage was not part of this run. There is no stock arm (stock cannot load a fork-built engine, and its exporter does not fit 32 GB). Engine: INT4 experts, FP16 attention, dense MLP and lm_head, FP16 bounded KV, MTP with tree 16, host prefix cache 4 GiB (see `poc/config/gemma4-26b.sh` for the reason behind every setting).
-
-**Reading the numbers.** The HumanEval rounds differ (160 and 157 of 164; greedy output is not bit-reproducible between identical runs). The decode rate in the long-context rows is *not* a steady decode speed: the answer is a few tokens long and prompt-lookup drafting accepts almost all of it, so it rises with the prompt (29 -> 75 tok/s); use the replay and the HumanEval generation rows for speed. The warm rows at 4,096 tokens and above show the prefix cache (cold 2.61 s -> warm 1.30 s at 4k; 5.13 -> 1.02 s at 7.5k); a 2,048-token prompt is one pass and gets no reuse.
+#### gemma4-26b on orin: optimised fork, no stock arm (2 rounds, medians)
 
 | | optimised |
 |---|---:|
@@ -506,25 +503,7 @@ HumanEval pass@1 (greedy, public benchmark), per round: stock did not run; optim
 |  | decode tokens/s at this context | not reached | 137.1 |
 |  | needles correct of 3 | not reached | 3 |
 
-#### Gemma 4 26B-A4B on the RTX 4060 8 GB (2026-10-22, optimised arm only, engine built by hand)
-
-**Reproduce it:** `PROFILE=dgpu MODEL=gemma4-26b docker compose up` (needs an 8 GB GPU with 40 GB or more of host RAM + swap for the builder and a PCIe link: the experts live in host memory; `config/gemma4-26b.dgpu.sh` has one reason per setting). The profile pins fork `dev` at `12eb9e7` (`FAST_REF_DGPU` in the Dockerfile; the Orin profile stays at `ff5e1fe`). The numbers below were measured with the same `bench.py` and `workload.jsonl` (poc `474d349`, unedited, same flags: 60 calls, HumanEval 164, long context 2,048 / 4,096 / 7,500, 2 rounds with a server restart) on an engine built **by hand** with separate build scripts (not part of this repo) and exactly the settings that `config/gemma4-26b.dgpu.sh` now holds, on fork `dev` content of `481a34c` (`12eb9e7` adds only an opt-in counter). **Verification status of the profile itself: the builder path (re-shard, layer-wise GPTQ of the dense part, export with the INT8 KV scales, build with `EDGELLM_MOE_STAGE_EXPERTS=2`, serve with the host-weights environment) was written from the hand-built recipe and has not yet been run end to end from a clean data directory; the stages and the numbers it produces will be added here when it has.** Until then treat a different number from your own run as information, not as a regression of the table. The two 26B result sets are therefore **not a hardware ranking**: the engines differ, each chosen for its box.
-
-| | Orin (this repo's profile) | RTX 4060 8 GB (hand-built engine) |
-|---|---|---|
-| Dense part (attention, dense MLP, lm_head) | FP16 | INT4 (GPTQ) |
-| Experts | INT4 in unified memory | INT4, streamed over PCIe from host RAM, 45 device-cache slots per layer, chunked prefetch ring |
-| KV cache | FP16, bounded sliding window | INT8, bounded sliding window |
-| Speculative decoding | MTP drafter, verify tree 16, suffix draft | none (MTP was slower than plain decoding on this box) |
-| Prefix cache | 4 GiB host | 4 GiB host |
-| Replay of 60 requests, seconds (lower is better) | **246.0** | **323.8** |
-| HumanEval pass@1 of 164 (per round) | 160 / 157 | 153 / 155 |
-| Decode cold / warm, tokens/s (higher is better) | 34.4 / 48.2 | 54.1 / 55.6 |
-| Prefill of a fresh 1.5k prompt, tokens/s (higher is better) | 1,556 | 992 |
-| Needles at 2k / 4k / 7.5k (3 planted facts) | 3 / 3 / 3 | 3 / 3 / 3 |
-| GPU memory | engine in unified memory | 7,581 MiB |
-
-The 4060's retrieval check here (3 needles) does not resolve the retrieval cost of dense INT4 that was measured with 8 independent prompts per length (2k tokens: Orin dense INT4 6 of 8 prompts all-3 against 8 of 8 for FP16 dense). Full 4060 report:
+#### gemma4-26b on dgpu: optimised fork, no stock arm (2 rounds, medians)
 
 | | optimised |
 |---|---:|
