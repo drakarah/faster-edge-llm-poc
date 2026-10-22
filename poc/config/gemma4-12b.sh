@@ -34,6 +34,7 @@ if [ "$PROFILE" = dgpu ]; then
   TREE=16
   DRAFTER_INT4_MLP=1
   EXPORT_ENV="$EXPORT_ENV EDGELLM_GEMMA4_DRAFT_HEAD_INT4=1"
+  # draft-top-k 6 x 3 steps: the 6 x 3 tree of the 4060 12B sweep (verify size 20 -> 16 above); --tool-call-parser gemma4: the model's tool-call format.
   SERVE_ARGS="--draft-top-k 6 --draft-step 3 --verify-tree-size 16 --tool-call-parser gemma4"
   BUILD_ENV="EDGELLM_XQA_NVRTC_OPTS=-DXQA_QK_INT8=1"
   # 8 GB card: capacity 32,768 uses 7,515 MiB, 49,152 loads at 7,697 MiB, 65,536 fails (CUDA out of memory in the runtime, with and without split-KV).
@@ -41,7 +42,7 @@ if [ "$PROFILE" = dgpu ]; then
 fi
 SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MTP_SUFFIX_DRAFT=19 EDGELLM_MTP_SUFFIX_MIN=3 EDGELLM_MTP_SUFFIX_PROMPT=16384"
 if [ "$PROFILE" = dgpu ]; then
-  SERVE_ENV="$SERVE_ENV EDGELLM_EMBEDDING_ON_HOST=1 EDGELLM_SWA_PREFIX_CACHE_MB=16384 EDGELLM_FMHA_INT8_QK=1"   # INT8 Q.K^T also in the prompt pass (23k prompt 18.6 -> 13.1 s); # an 8 GB card: tables and prefix snapshots in pinned host RAM
+  SERVE_ENV="$SERVE_ENV EDGELLM_EMBEDDING_ON_HOST=1 EDGELLM_SWA_PREFIX_CACHE_MB=16384 EDGELLM_FMHA_INT8_QK=1"   # INT8 Q.K^T also in the prompt pass (23k prompt 18.6 -> 13.1 s); EMBEDDING_ON_HOST: an 8 GB card keeps the embedding table in pinned host RAM; PREFIX_CACHE 16 GiB: snapshots live in host RAM and cost no VRAM, replay-396 -28.6% (the Orin keeps 4 GiB because its host RAM is its GPU memory)
 else
   SERVE_ENV="$SERVE_ENV EDGELLM_INT4_GEMV_MAX_M=1 EDGELLM_SWA_PREFIX_CACHE_MB=4096"        # unified memory: no host-side tricks
   # INT8 tensor-core prompt GEMM (W4A8): prompt speed +15%, replay of 60 calls -8.5%, HumanEval 93.9% (off 90.9%, a single greedy run each: no visible loss).

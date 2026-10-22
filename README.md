@@ -508,14 +508,14 @@ HumanEval pass@1 (greedy, public benchmark), per round: stock did not run; optim
 
 #### Gemma 4 26B-A4B on the RTX 4060 8 GB (2026-10-22, optimised arm only, engine built by hand)
 
-**Reproduce it:** `PROFILE=dgpu MODEL=gemma4-26b docker compose up` (needs an 8 GB GPU with 40 GB or more of host RAM + swap for the builder and a PCIe link: the experts live in host memory; `config/gemma4-26b.dgpu.sh` has one reason per setting). The profile pins fork `dev` at `12eb9e7` (`FAST_REF_DGPU` in the Dockerfile; the Orin profile stays at `ff5e1fe`). The numbers below were measured with the same `bench.py` and `workload.jsonl` (poc `474d349`, unedited, same flags: 60 calls, HumanEval 164, long context 2,048 / 4,096 / 7,500, 2 rounds with a server restart) on an engine built **by hand** with the research repo's scripts and exactly the settings that `config/gemma4-26b.dgpu.sh` now holds, on fork `dev` content of `481a34c` (`12eb9e7` adds only an opt-in counter). **Verification status of the profile itself: the builder path (re-shard, layer-wise GPTQ of the dense part, export with the INT8 KV scales, build with `EDGELLM_MOE_STAGE_EXPERTS=2`, serve with the host-weights environment) was written from the hand-built recipe and has not yet been run end to end from a clean data directory; the stages and the numbers it produces will be added here when it has.** Until then treat a different number from your own run as information, not as a regression of the table. The two 26B result sets are therefore **not a hardware ranking**: the engines differ, each chosen for its box.
+**Reproduce it:** `PROFILE=dgpu MODEL=gemma4-26b docker compose up` (needs an 8 GB GPU with 40 GB or more of host RAM + swap for the builder and a PCIe link: the experts live in host memory; `config/gemma4-26b.dgpu.sh` has one reason per setting). The profile pins fork `dev` at `12eb9e7` (`FAST_REF_DGPU` in the Dockerfile; the Orin profile stays at `ff5e1fe`). The numbers below were measured with the same `bench.py` and `workload.jsonl` (poc `474d349`, unedited, same flags: 60 calls, HumanEval 164, long context 2,048 / 4,096 / 7,500, 2 rounds with a server restart) on an engine built **by hand** with separate build scripts (not part of this repo) and exactly the settings that `config/gemma4-26b.dgpu.sh` now holds, on fork `dev` content of `481a34c` (`12eb9e7` adds only an opt-in counter). **Verification status of the profile itself: the builder path (re-shard, layer-wise GPTQ of the dense part, export with the INT8 KV scales, build with `EDGELLM_MOE_STAGE_EXPERTS=2`, serve with the host-weights environment) was written from the hand-built recipe and has not yet been run end to end from a clean data directory; the stages and the numbers it produces will be added here when it has.** Until then treat a different number from your own run as information, not as a regression of the table. The two 26B result sets are therefore **not a hardware ranking**: the engines differ, each chosen for its box.
 
 | | Orin (this repo's profile) | RTX 4060 8 GB (hand-built engine) |
 |---|---|---|
 | Dense part (attention, dense MLP, lm_head) | FP16 | INT4 (GPTQ) |
 | Experts | INT4 in unified memory | INT4, streamed over PCIe from host RAM, 45 device-cache slots per layer, chunked prefetch ring |
 | KV cache | FP16, bounded sliding window | INT8, bounded sliding window |
-| Speculative decoding | MTP drafter, verify tree 16, suffix draft | none (MTP was slower than plain decoding on this box in the research repo's METRICS R25h) |
+| Speculative decoding | MTP drafter, verify tree 16, suffix draft | none (MTP was slower than plain decoding on this box) |
 | Prefix cache | 4 GiB host | 4 GiB host |
 | Replay of 60 requests, seconds (lower is better) | **246.0** | **323.8** |
 | HumanEval pass@1 of 164 (per round) | 160 / 157 | 153 / 155 |
@@ -524,7 +524,7 @@ HumanEval pass@1 (greedy, public benchmark), per round: stock did not run; optim
 | Needles at 2k / 4k / 7.5k (3 planted facts) | 3 / 3 / 3 | 3 / 3 / 3 |
 | GPU memory | engine in unified memory | 7,581 MiB |
 
-The 4060's retrieval check here (3 needles) does not resolve the retrieval cost of dense INT4 that the research repo measured with 8 independent prompts per length (2k tokens: Orin dense INT4 6 of 8 prompts all-3 against 8 of 8 for FP16 dense). Full 4060 report:
+The 4060's retrieval check here (3 needles) does not resolve the retrieval cost of dense INT4 that was measured with 8 independent prompts per length (2k tokens: Orin dense INT4 6 of 8 prompts all-3 against 8 of 8 for FP16 dense). Full 4060 report:
 
 | | optimised |
 |---|---:|
