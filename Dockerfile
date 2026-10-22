@@ -18,6 +18,9 @@ ARG STOCK_REPO=https://github.com/NVIDIA/TensorRT-Edge-LLM.git
 ARG STOCK_REF=0f52705723abfa8c6702654bfdcc082a728ed353
 ARG FAST_REPO=https://github.com/drakarah/TensorRT-Edge-LLM.git
 ARG FAST_REF=ff5e1febe674aeaa18204b6d774dc046a320f72f
+# The discrete-GPU profile pins a newer commit: the 26B dgpu engine streams its experts from host memory (expert cache, prefill chunk ring: fork dev 12eb9e7).
+# The Orin pin stays where its measurements were taken.
+ARG FAST_REF_DGPU=12eb9e785cfa800cfd584e8dc5e255ccf0f38d58
 
 # Python dependencies of the exporter, the server and the quantisation tools (torch and numpy come from the base image).
 COPY poc/build/pins.txt /tmp/pins.txt
@@ -26,7 +29,8 @@ RUN pip install --no-cache-dir -r /tmp/pins.txt
 COPY poc/build/build_edgellm.sh /usr/local/bin/build_edgellm.sh
 RUN git clone "${STOCK_REPO}" /opt/stock && git -C /opt/stock checkout "${STOCK_REF}" \
     && git -C /opt/stock submodule update --init --recursive
-RUN git clone "${FAST_REPO}" /opt/fast && git -C /opt/fast checkout "${FAST_REF}" \
+RUN FAST_PIN=$( [ "${PROFILE}" = dgpu ] && echo "${FAST_REF_DGPU}" || echo "${FAST_REF}" ) && echo "${FAST_PIN}" > /opt/fast_ref \
+    && git clone "${FAST_REPO}" /opt/fast && git -C /opt/fast checkout "${FAST_PIN}" \
     && git -C /opt/fast submodule update --init --recursive
 
 # Both stacks are compiled the same way. Only the fast stack gets two extra build options: the INT4 GEMM that applies the group
@@ -37,7 +41,7 @@ RUN env PROFILE=${PROFILE} GPU_ARCH=${GPU_ARCH} BUILD_JOBS=${BUILD_JOBS} \
     EDGELLM_INT4_GEMM_GROUP_FLUSH=1 $( [ "${PROFILE}" = dgpu ] && echo EDGELLM_INT4_GEMM_FP16_ACC_MIN_BM=64 || true ) build_edgellm.sh /opt/fast
 
 COPY poc /poc
-ENV PYTHONDONTWRITEBYTECODE=1 PROFILE=${PROFILE} FAST_REF=${FAST_REF} STOCK_REF=${STOCK_REF}
+ENV PYTHONDONTWRITEBYTECODE=1 PROFILE=${PROFILE} STOCK_REF=${STOCK_REF}
 WORKDIR /poc
 ENTRYPOINT ["/poc/run.sh"]
 CMD ["all"]

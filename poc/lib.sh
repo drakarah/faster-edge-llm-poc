@@ -64,9 +64,22 @@ quantise_gemma() {
 }
 
 quantise_gemma4moe() {
-  # No quantisation checkpoint: the exporter packs the experts as it loads them. The BF16 checkpoint has one 49.9 GB shard, which cannot be
+  # No quantisation checkpoint for the experts: the exporter packs them as it loads them. The BF16 checkpoint has one 49.9 GB shard, which cannot be
   # mmap'd in 32 GB: re-shard into 2 GB files (plain reads) and drop the original.
   step "re-shard the BF16 checkpoint (49.9 GB shard cannot be mmap'd)"
+  if [ "${DENSE_GPTQ:-0}" = 1 ]; then
+    # Dense part (attention, dense MLP, lm_head) as calibrated INT4 g128, one decoder layer at a time (the 51 GB model never has to be resident): the output
+    # checkpoint is the BF16 shards (hard links) plus model-dense-int4.safetensors; the exporter reads both.
+    prepare_text
+    rm -rf $WORK/bf16; mkdir -p $WORK
+    python $POC/tools/reshard_safetensors.py $BASE $WORK/bf16 2
+    rm -rf $BASE
+    step "layer-wise GPTQ of the dense part (INT4 g128, $GPTQ_SAMPLES samples)"
+    rm -rf $CKPT
+    python $POC/tools/gptq_dense_layerwise_26b.py $WORK/bf16 $CKPT --text-dir $DATA/text --samples $GPTQ_SAMPLES --seq-len 1024
+    rm -rf $WORK
+    return
+  fi
   rm -rf $CKPT
   python $POC/tools/reshard_safetensors.py $BASE $CKPT 2
   rm -rf $BASE
@@ -86,7 +99,7 @@ quantise_qwen() {
 }
 
 build_stamp() {  # $1 pinned commit of the stack: changes when the image is rebuilt on another commit or the model config changes
-  echo "$1 $(md5sum $POC/config/$MODEL.sh | cut -c1-12)"
+  echo "$1 $(md5sum $POC/$CONFIG | cut -c1-12)"
 }
 
 builder() {
@@ -119,8 +132,12 @@ build_fast() {
   export EDGELLM_XQA_MULTI_BLOCK=auto                       # split-KV decode attention, sized from the GPU's SM count
   local COMMON="--maxInputLen $MAXIN --maxKVCacheCapacity $CAP --maxBatchSize 1 --maxKVPoolPages $POOL"
   local OUT=$FAST/engine; [ "$INT8_EMBEDDINGS" = 1 ] && OUT=$FAST/engine_fp
-  env ${BUILD_ENV:-} $LLM_BUILD --onnxDir $FAST/onnx/llm --engineDir $OUT $COMMON --maxVerifyTreeSize $TREE --specBase > $LOG_DIR/$MODEL-$PROFILE-build-base.log 2>&1
-  env ${BUILD_ENV:-} $LLM_BUILD --onnxDir $FAST/onnx/mtp_draft --engineDir $OUT $COMMON --maxDraftTreeSize $TREE --specDraft > $LOG_DIR/$MODEL-$PROFILE-build-draft.log 2>&1
+  if [ "${NO_SPEC:-0}" = 1 ]; then   # plain autoregressive engine (no drafter, no verify tree)
+    env ${BUILD_ENV:-} $LLM_BUILD --onnxDir $FAST/onnx/llm --engineDir $OUT $COMMON > $LOG_DIR/$MODEL-$PROFILE-build-base.log 2>&1
+  else
+    env ${BUILD_ENV:-} $LLM_BUILD --onnxDir $FAST/onnx/llm --engineDir $OUT $COMMON --maxVerifyTreeSize $TREE --specBase > $LOG_DIR/$MODEL-$PROFILE-build-base.log 2>&1
+    env ${BUILD_ENV:-} $LLM_BUILD --onnxDir $FAST/onnx/mtp_draft --engineDir $OUT $COMMON --maxDraftTreeSize $TREE --specDraft > $LOG_DIR/$MODEL-$PROFILE-build-draft.log 2>&1
+  fi
   [ "$INT8_EMBEDDINGS" = 1 ] && { python $POC/tools/quantize_ple.py $FAST/engine_fp $FAST/engine --token-embedding; rm -rf $FAST/engine_fp; }
   rm -rf $FAST/onnx
   build_stamp $FAST_REF > $FAST/.done

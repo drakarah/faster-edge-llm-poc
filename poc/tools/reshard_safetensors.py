@@ -6,6 +6,11 @@ import json, struct, sys, os, shutil
 src, dst = sys.argv[1], sys.argv[2]; lim = float(sys.argv[3] if len(sys.argv) > 3 else 2) * 2**30
 os.makedirs(dst, exist_ok=True)
 ix = json.load(open(f'{src}/model.safetensors.index.json'))
+if all(os.path.getsize(f'{src}/{sh}') <= lim for sh in set(ix['weight_map'].values())):   # already small shards (a seeded copy): hard-link instead of copying 49 GB again
+    for f in os.listdir(src):
+        if f.endswith('.safetensors'): os.link(f'{src}/{f}', f'{dst}/{f}')
+        else: shutil.copy(f'{src}/{f}', dst)
+    print('RESHARD_DONE: shards already small, hard-linked'); sys.exit(0)
 for f in os.listdir(src):
     if not f.endswith('.safetensors') and f != 'model.safetensors.index.json': shutil.copy(f'{src}/{f}', dst)
 tens = []  # (name, shard, dtype, shape, off0, off1, base)

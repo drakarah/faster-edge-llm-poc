@@ -8,6 +8,7 @@ BENCH_PORT=${BENCH_PORT:-18080}
 BENCH_CALLS=${BENCH_CALLS:-60}           # recorded requests replayed per run
 BENCH_HUMANEVAL=${BENCH_HUMANEVAL:-164}  # HumanEval problems per run (public benchmark; 0 = skip)
 BENCH_ROUNDS=${BENCH_ROUNDS:-2}          # stock, optimised, stock, optimised, ...: the order cancels drift (thermal, clocks)
+FAST_REF=$(cat /opt/fast_ref 2>/dev/null || echo unknown)   # the commit of /opt/fast (the pin of this profile, written by the Dockerfile)
 MODELS_DIR=$DATA/models
 CKPT_DIR=$DATA/checkpoints/$MODEL
 ENGINE_DIR=$DATA/engines/$MODEL/$PROFILE
