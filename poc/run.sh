@@ -7,7 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 source config/common.sh
-[ -f "config/$MODEL.sh" ] || die "unknown MODEL '$MODEL' (gemma4-e4b | gemma4-12b | qwen35-4b)"
+[ -f "config/$MODEL.sh" ] || die "unknown MODEL '$MODEL' (gemma4-e4b | gemma4-12b | gemma4-26b | qwen35-4b)"
 source "config/$MODEL.sh"
 [ "${BENCH_LONGCTX-__default__}" = __default__ ] && BENCH_LONGCTX=$LONGCTX_DEFAULT
 BENCH_LONGCTX=${BENCH_LONGCTX}   # long-context test prompt lengths in tokens, comma-separated; empty skips it (default per model in config/)

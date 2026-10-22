@@ -2,7 +2,7 @@
 #   builder  downloads the model, quantises it, builds the optimised engine and lets the stock stack build its own (hours on first run)
 #   bench    times stock Edge-LLM and the optimised fork alternately on the same prompts and prints the comparison
 #   serve    keeps the optimised server up on http://localhost:${PORT:-8000}/v1 (OpenAI API)
-# Settings (.env or environment): PROFILE=orin|dgpu, MODEL=gemma4-e4b|gemma4-12b|qwen35-4b, HF_TOKEN (Gemma is gated), see .env.example
+# Settings (.env or environment): PROFILE=orin|dgpu, MODEL=gemma4-e4b|gemma4-12b|gemma4-26b|qwen35-4b, HF_TOKEN (Gemma is gated), see .env.example
 name: faster-llm-poc
 
 x-poc: &poc

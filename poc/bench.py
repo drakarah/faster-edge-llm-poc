@@ -217,18 +217,22 @@ def cmd_report(a):
             ("Replay output tokens in total (the stacks do not answer with the same length)", "replay_completion_tokens", "{:,.0f}", False),
             *([("HumanEval generation, tokens/s (higher is better)", "he_tok_s", "{:.1f}", True)] if he else []),
             ("GPU memory used, MiB", "gpu_memory_mib", "{:,.0f}", False)]
-    out = [f"### {a.model} on {a.profile}: stock Edge-LLM vs optimised fork ({len(fast)} rounds, medians)", "",
-           "| | stock | optimised | speed-up |", "|---|---:|---:|---:|"]
+    if stock:
+        out = [f"### {a.model} on {a.profile}: stock Edge-LLM vs optimised fork ({len(fast)} rounds, medians)", "",
+               "| | stock | optimised | speed-up |", "|---|---:|---:|---:|"]
+    else:   # no stock arm (the model does not run on stock Edge-LLM): optimised column only
+        out = [f"### {a.model} on {a.profile}: optimised fork, no stock arm ({len(fast)} rounds, medians)", "",
+               "| | optimised |", "|---|---:|"]
     for name, key, fmt, higher in rows:
         s, f_ = med(stock, key), med(fast, key)
         if f_ is None:
             continue
         up = "" if (not s or key == "replay_completion_tokens") else f"**{(f_ / s if higher else s / f_):.2f}x**"
-        out.append(f"| {name} | {fmt.format(s) if s else 'did not run'} | {fmt.format(f_)} | {up} |")
+        out.append(f"| {name} | {fmt.format(s) if s else 'did not run'} | {fmt.format(f_)} | {up} |" if stock else f"| {name} | {fmt.format(f_)} |")
     if he:
         def hp(rs):
             return "did not run" if not rs else " / ".join(f"{r['he_pass']}/{r['he_total']}" for r in rs)
-        out += ["", f"HumanEval pass@1 (greedy, public benchmark), per round: stock {hp(stock)}; optimised {hp(fast)}."]
+        out += ["", f"HumanEval pass@1 (greedy, public benchmark), per round: " + (f"stock {hp(stock)}; " if stock else "") + f"optimised {hp(fast)}."]
     refused = {n: sum(len(r.get("replay_errors", [])) for r in rs) for n, rs in (("stock", stock), ("optimised", fast)) if rs}
     if any(refused.values()):
         out += ["", "Requests refused by a server (not counted in its replay seconds; see `replay_errors` in `results/`): " +
@@ -246,14 +250,15 @@ def cmd_report(a):
                 return fmt.format(statistics.median(good))
             return "refused / failed" if vals else "not reached"
         out += ["", "#### Long context (prompts of the given length, greedy; cold = nothing to reuse, warm = same prompt again, needles = exact retrieval of 3 planted facts)", "",
-                "| prompt tokens | metric | stock | optimised |", "|---:|---|---:|---:|"]
+                *(["| prompt tokens | metric | stock | optimised |", "|---:|---|---:|---:|"] if stock else ["| prompt tokens | metric | optimised |", "|---:|---|---:|"])]
         for L in lc:
             ptoks = med([r.get("longctx", {}).get(str(L), {}) for r in fast], "prompt_tokens")
             for name, key, fmt in (("cold time to first token, s", "cold_s", "{:.2f}"), ("cold prompt tokens/s", "cold_tok_s", "{:,.0f}"),
                                    ("warm time to first token, s", "warm_ttft_s", "{:.2f}"), ("decode tokens/s at this context", "decode_tok_s", "{:.1f}"),
                                    ("needles correct of 3", "needles_ok", "{:.0f}")):
                 label = f"{L:,}" + (f" (actual {ptoks:,.0f})" if ptoks and key == "cold_s" else "")
-                out.append(f"| {label if key == 'cold_s' else ''} | {name} | {cell(stock, L, key, fmt)} | {cell(fast, L, key, fmt)} |")
+                out.append(f"| {label if key == 'cold_s' else ''} | {name} | {cell(stock, L, key, fmt)} | {cell(fast, L, key, fmt)} |" if stock
+                           else f"| {label if key == 'cold_s' else ''} | {name} | {cell(fast, L, key, fmt)} |")
         errs = sorted({f"{n} {L}: {v['error']}" for n, rs in (("stock", stock), ("optimised", fast)) for r in rs for L, v in r.get("longctx", {}).items() if "error" in v})
         if errs:
             out += ["", "Long-context refusals / failures: " + "; ".join(errs[:6])]

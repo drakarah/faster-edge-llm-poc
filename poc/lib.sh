@@ -63,6 +63,15 @@ quantise_gemma() {
   rm -rf $WORK
 }
 
+quantise_gemma4moe() {
+  # No quantisation checkpoint: the exporter packs the experts as it loads them. The BF16 checkpoint has one 49.9 GB shard, which cannot be
+  # mmap'd in 32 GB: re-shard into 2 GB files (plain reads) and drop the original.
+  step "re-shard the BF16 checkpoint (49.9 GB shard cannot be mmap'd)"
+  rm -rf $CKPT
+  python $POC/tools/reshard_safetensors.py $BASE $CKPT 2
+  rm -rf $BASE
+}
+
 quantise_qwen() {
   need_memory_gb 40
   step "INT4-AWQ with Edge-LLM's own quantiser"
@@ -91,7 +100,7 @@ builder() {
   }
   # An engine is only reused when it was built by this image's pinned fork commit with this model's config; the stamp is stored in .done.
   [ "$(cat $FAST/.done 2>/dev/null)" = "$(build_stamp $FAST_REF)" ] || build_fast
-  [ "$(cat $STOCK_CACHE/.done 2>/dev/null)" = "$(build_stamp $STOCK_REF)" ] || build_stock
+  [ "${NO_STOCK:-0}" = 1 ] || [ "$(cat $STOCK_CACHE/.done 2>/dev/null)" = "$(build_stamp $STOCK_REF)" ] || build_stock
   step "builder finished"
 }
 
@@ -164,7 +173,7 @@ bench() {
   if [ -n "$old" ]; then local keep=$RESULT_DIR/previous-$(date +%Y%m%d-%H%M%S); mkdir -p $keep; mv $old $keep/; fi
   local r
   for r in $(seq 1 $BENCH_ROUNDS); do
-    if [ ! -f $STOCK_CACHE/.failed ]; then
+    if [ "${NO_STOCK:-0}" != 1 ] && [ ! -f $STOCK_CACHE/.failed ]; then
       step "round $r: stock"
       start_stock $BENCH_PORT
       if wait_ready $BENCH_PORT $SERVER_PID 1800; then
