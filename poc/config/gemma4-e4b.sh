@@ -1,12 +1,12 @@
 # Gemma 4 E4B (google/gemma-4-E4B-it) with its MTP assistant.
 KIND=gemma4
-LONGCTX_DEFAULT=2048,4096,8192   # both engines hold 10,240 tokens; set BENCH_LONGCTX and rebuild with a larger capacity to go further
+LONGCTX_DEFAULT=2048,4096,8192,16384,24576,30000   # the optimised engine holds 32,768 tokens; stock holds 10,240 (it has no chunked prefill) and is recorded as not reached above that
 BASE_REPO=google/gemma-4-E4B-it-qat-w4a16-ct          # Google's QAT checkpoint (group 32): the quantiser's starting point
 ASSIST_REPO=google/gemma-4-E4B-it-assistant
 GPTQ_SAMPLES=256
 KV_SCALES=$POC/data/gemma4-e4b-int8-kv-scales.json
 # --- optimised stack ---
-MAXIN=2048; CAP=10240; POOL=320; TREE=12              # engine: prompt tokens per pass, KV capacity, KV pool pages (prefix reuse), max verify tree
+MAXIN=2048; CAP=32768; STOCK_CAP=10240; POOL=320; TREE=12              # engine: prompt tokens per pass, KV capacity, KV pool pages (prefix reuse), max verify tree
 # Export switches (README rows have the measurements): GELU_PLUGIN = fused GELU(gate)*up kernel (prompt passes -11%); FUSE_GEMMA4_INT4 = fused q+k+v and gate+up INT4 GEMMs (decode +7%);
 # INT8_KV_SCALES = INT8 KV cache with per-layer scales (calibrated, $KV_SCALES); SPARSE_DRAFT_LOGITS = the drafter returns 4,096 candidates instead of a 262,144-entry row (about -1% per token).
 EXPORT_ENV="EDGELLM_GEMMA4_GELU_PLUGIN=1 EDGELLM_FUSE_GEMMA4_INT4=1 EDGELLM_INT8_KV_SCALES=$KV_SCALES EDGELLM_GEMMA4_SPARSE_DRAFT_LOGITS=1"
@@ -27,5 +27,5 @@ SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MTP_SUF
 # upstream has no chunked prompt pass: the engine must take a whole prompt, so its input limit is the full context
 # stock's own default drafting (one chain of 6, verify size 7) decodes at 19 tok/s on the Orin, slower than no speculation (29); stock's tree flags
 # with the same values the optimised stack uses give 32 tok/s (measured on engines built for the default maximum tree of 60; 32.5 on the engines built for TREE, README), so the stock arm gets those: its best setting, not a strawman.
-STOCK_ARGS="--max-input-len $CAP --max-kv-cache-capacity $CAP --enable-context-reuse --enable-auto-tool-choice --draft-top-k 2 --draft-step 5 --verify-tree-size 12 --max-verify-tree-size $TREE --max-draft-tree-size $TREE"
+STOCK_ARGS="--max-input-len $STOCK_CAP --max-kv-cache-capacity $STOCK_CAP --enable-context-reuse --enable-auto-tool-choice --draft-top-k 2 --draft-step 5 --verify-tree-size 12 --max-verify-tree-size $TREE --max-draft-tree-size $TREE"
 STOCK_SPEC='{"method":"mtp","model":"@ASSIST@"}'

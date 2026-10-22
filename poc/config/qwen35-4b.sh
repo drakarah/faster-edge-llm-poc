@@ -1,10 +1,13 @@
 # Qwen3.5-4B (Qwen/Qwen3.5-4B): hybrid model (gated delta-net + attention) with its built-in MTP layer.
 KIND=qwen
-LONGCTX_DEFAULT=2048,4096,8192   # both engines hold 10,240 tokens
+LONGCTX_DEFAULT=2048,4096,8192,16384,24576,30000   # the optimised engine holds 32,768 tokens (12,288 on the 8 GB card, where larger engines do not load); stock holds 10,240 and is recorded as not reached above that
 BASE_REPO=Qwen/Qwen3.5-4B
 ASSIST_REPO=
-# MAXIN = CAP = 10,240: one app prompt is 8,901 Qwen tokens and the 8,192-token engine answered it with HTTP 400 (found on the 396-call replay); rebuilt at 10,240, probe unchanged (49.5 tok/s decode, 1,123 tok/s prefill, GPU 5.82 GB).
-MAXIN=10240; CAP=10240; POOL=320; TREE=12
+# MAXIN = CAP: the hybrid engine cannot chunk its prompt, so the input limit is the longest prompt it takes. Orin 32,768 (fits in unified memory; 4,096-token passes refuse every longer prompt, one app prompt alone is 8,901 tokens).
+# RTX 4060 8 GB: 32,768, 24,576 and 16,384 do not load (cudaMalloc out of memory at runtime init), 12,288 does (7,669 MiB); 10,240 refused 16k.
+# STOCK_CAP: stock keeps its 10,240-token engine (it was built there for the tables; larger stock engines were not tried).
+MAXIN=32768; CAP=32768; STOCK_CAP=10240; POOL=320; TREE=12
+if [ "$PROFILE" = dgpu ]; then MAXIN=12288; CAP=12288; LONGCTX_DEFAULT=2048,4096,8192,12000; fi
 EXPORT_ENV=""
 EXPORT_ARGS="--mtp --draft-reduced-vocab-dir $POC/data/vocab/qwen35"
 INT8_EMBEDDINGS=0
@@ -27,5 +30,5 @@ SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_HYBRID_
 STOCK_TREE="--draft-top-k 1 --draft-step 3 --verify-tree-size 4"
 # Stock refuses --enable-context-reuse on this hybrid model at startup ("Hybrid context reuse requires at least one recurrent snapshot slot", contextCacheCoordinator.cpp:916):
 # the upstream gap that the fork's hybrid prefix reuse exists for. So stock runs without prefix reuse; everything else is the optimised arm's setting.
-STOCK_ARGS="--max-input-len $MAXIN --max-kv-cache-capacity $CAP --enable-auto-tool-choice $STOCK_TREE --max-verify-tree-size $TREE --max-draft-tree-size $TREE"
+STOCK_ARGS="--max-input-len $STOCK_CAP --max-kv-cache-capacity $STOCK_CAP --enable-auto-tool-choice $STOCK_TREE --max-verify-tree-size $TREE --max-draft-tree-size $TREE"
 STOCK_SPEC='{"method":"mtp"}'
