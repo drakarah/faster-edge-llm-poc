@@ -515,7 +515,7 @@ HumanEval pass@1 (greedy, public benchmark), per round: stock did not run; optim
 | Dense part (attention, dense MLP, lm_head) | FP16 | INT4 (GPTQ) |
 | Experts | INT4 in unified memory | INT4, streamed over PCIe from host RAM, 45 device-cache slots per layer, chunked prefetch ring |
 | KV cache | FP16, bounded sliding window | INT8, bounded sliding window |
-| Speculative decoding | MTP drafter, verify tree 16, suffix draft | none (MTP loses on this box: the drafter's extra expert fetches cost more than they save) |
+| Speculative decoding | MTP drafter, verify tree 16, suffix draft | none (MTP was slower than plain decoding on this box in the research repo's METRICS R25h) |
 | Prefix cache | 4 GiB host | 4 GiB host |
 | Replay of 60 requests, seconds (lower is better) | **246.0** | **323.8** |
 | HumanEval pass@1 of 164 (per round) | 160 / 157 | 153 / 155 |
