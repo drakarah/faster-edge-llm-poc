@@ -135,6 +135,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | Quantise each layer's BF16 experts to INT4 as they load (`--externalize-weights int4_ffn int4_moe` export) | the exporter packs the fused expert tensors of a layer to Marlin INT4 as soon as both are loaded and frees them, so the 51 GB checkpoint is never resident in full | not a speed change: the 26B export fits a 32 GB Orin (10 min, container RAM peak 23.0 GiB, swap 0.9 GiB); the resulting engine is 5.5 GB plus 13 GB of sidecar weights, 20.9 GiB of server memory | none | yes | [`feat/gemma4-moe-layerwise-expert-quant`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/feat/gemma4-moe-layerwise-expert-quant) ([ff05062](https://github.com/drakarah/TensorRT-Edge-LLM/commit/ff05062)) |
 | MTP drafter and verify tree 16 for the 26B (`--mtp` accepted by the MoE export, assistant checkpoint) | the speculative path of the dense models also runs on the MoE | Orin: 300-token code probe 25.1 -> 40.9 tok/s (1.63x); HumanEval generation 24.7 -> 50.8 tok/s, 158/164 against 159/164 (one round each, suffix draft and JSON cap in the second number) | draft engine 0.37 GB | yes | upstream MTP path, no extra branch |
 | 8-row Marlin block for the 16-token verify step (`EDGELLM_MOE_SMALL_THRESHOLD=16`) | the MoE plugin used the 8-row block only up to 8 tokens; a verify of 16 tokens spreads about one row per expert and was padded to 32 rows | Orin, 26B: decode probe 29.3-30.9 -> 33.8-34.9 tok/s (+13%); HumanEval generation 51.6 -> **60.2 tok/s (+17%)**; replay-60 313.0 -> **276.3 s (-11.7%)**; prefill unchanged; larger prefill blocks (48, 64) and a register cap for 3 blocks per SM were slower | none | HumanEval 158/164 both, needles 3/3 | [`perf/moe-small-block-threshold`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/perf/moe-small-block-threshold) ([6460200](https://github.com/drakarah/TensorRT-Edge-LLM/commit/6460200)) |
+| Bounded sliding-window KV + host prefix cache for the 26B (`EDGELLM_GEMMA4_BOUNDED_KV_SPEC=1` at export, `EDGELLM_SWA_PREFIX_CACHE_MB=4096` at serve; the 26B's MTP export keeps full KV otherwise, so the cache had nothing to attach to) | the sliding layers keep 1,152 positions; the host cache snapshots them between prefill passes of 2,048 tokens | Orin, 26B (same engine, one round each): replay-60 262.7 -> **234.0 s (-10.9%)**; warm time to first token at 4k / 7.5k prompts 2.43 / 4.73 -> **1.32 / 1.02 s**; no gain for prompts under one 2,048-token pass; cold prefill 5-9% slower (1,712 -> 1,565 tok/s at 1.4k) | 4 GiB of the unified memory; KV pool smaller | HumanEval 158 -> 157/164, needles 3/3/3 (within noise) | [`rtx4060/gemma4-bounded-prefix-cache`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/rtx4060/gemma4-bounded-prefix-cache) ([b5363a2](https://github.com/drakarah/TensorRT-Edge-LLM/commit/b5363a2)) |
 | **Qwen3.5-4B and other hybrid (GDN) models** (none of these affect Gemma 4) | | | | | |
 | GDN prefill kernel for sm_80-class GPUs, state in registers | sequential token loop with the state in registers instead of shared memory | kernel 40.2 -> 9.2 ms at 2,048 tokens (4.4x); engine prefill 1,121 -> 1,788-1,842 tok/s (+62%); replay-60 293 -> 231 s (-21%) | none | no (Qwen) | [`exp/gdn-prefill-sm80`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/exp/gdn-prefill-sm80) ([029ff0d](https://github.com/drakarah/TensorRT-Edge-LLM/commit/029ff0d)) |
 | GDN multi-token verify kernel | state read once into registers per verify | 230.7 -> 84 us per layer call; decode probe 45.2 -> 52.5 tok/s (+16%); replay-60 -4.4% | none | no (Qwen) | [`exp/gdn-mtp-verify-sm80`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/exp/gdn-mtp-verify-sm80) ([a0812cf](https://github.com/drakarah/TensorRT-Edge-LLM/commit/a0812cf)) |
@@ -187,7 +188,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 
 ## Results
 
-> **Pin note (2026-10-22, updated):** the image now pins the fork's `dev` at `ff5e1fe`: `07382e4` plus the RTX 4060 session's merge of its MoE expert cache, host-pinned expert staging and prefill overlap (all off unless an env variable switches them on, and aimed at experts streamed over PCIe, so they should do nothing on the Orin's unified memory; a check of that on the Orin is part of the 26B run). `07382e4` is `2e02476` plus six commits that change nothing for the three models below (an opt-in prefix-snapshot interval, the fix for a chunked prompt that ends in a one-token pass, and the 26B-A4B additions: the 8-row Marlin block threshold and layer-wise expert quantisation, both off unless a model's config sets them). The three result tables below were measured at `2e02476` (INT4 drafter head and MLP for the 12B on the Orin, W4A8 stage 4, split-K 3/5 decode variants, and the optional INT8 Q.K^T decode attention that only the 4060 profile switches on). The result tables below were measured at that earlier pin with the PoC files of commit `c5d0f39` (the Orin image was built from the Dockerfile of `3eeb42e`; the only difference, a dgpu-only line fixed in `6cf1fd2`, is empty for `PROFILE=orin`). Later commits change only this README. Results from the earlier pin `e4fd0ef` (2026-10-19) are replaced.
+> **Pin note (2026-10-22, updated):** the image now pins the fork's `dev` at `ff5e1fe`: `07382e4` plus the RTX 4060 session's merge of its MoE expert cache, host-pinned expert staging and prefill overlap (all off unless an env variable switches them on, and aimed at experts streamed over PCIe, so they should do nothing on the Orin's unified memory; the 26B run below was done on this pin: it ran with all of them unset and gave the expected numbers, which is consistent with a no-op, though it is not an A/B against `07382e4`). `07382e4` is `2e02476` plus six commits that change nothing for the three models below (an opt-in prefix-snapshot interval, the fix for a chunked prompt that ends in a one-token pass, and the 26B-A4B additions: the 8-row Marlin block threshold and layer-wise expert quantisation, both off unless a model's config sets them). The three result tables below were measured at `2e02476` (INT4 drafter head and MLP for the 12B on the Orin, W4A8 stage 4, split-K 3/5 decode variants, and the optional INT8 Q.K^T decode attention that only the 4060 profile switches on). The result tables below were measured at that earlier pin with the PoC files of commit `c5d0f39` (the Orin image was built from the Dockerfile of `3eeb42e`; the only difference, a dgpu-only line fixed in `6cf1fd2`, is empty for `PROFILE=orin`). Later commits change only this README. Results from the earlier pin `e4fd0ef` (2026-10-19) are replaced.
 
 ### Jetson AGX Orin 32 GB, 2026-10-21/22 (GPU pinned at 930 MHz, 2 rounds, medians)
 
@@ -326,6 +327,44 @@ Greedy answers identical to stock: 12/60 (mean text similarity 0.623). Quantised
 |  | warm time to first token, s | 7.40 | 0.07 |
 |  | decode tokens/s at this context | 43.3 | 77.6 |
 |  | needles correct of 3 | 3 | 3 |
+
+#### Gemma 4 26B-A4B on the Jetson AGX Orin (2026-10-22, pin `ff5e1fe`, optimised arm only)
+
+Run from a clean data dir through the compose `builder` and `bench` services (re-shard 2 min, export 11 min, engine builds 6 min, then the bench; 23 minutes for the whole builder). **The BF16 base checkpoint was copied from another machine instead of downloaded** (the Orin's Wi-Fi gave 6.5 MB/s; same files, `rsync -c` verified), so the download stage was not part of this run. There is no stock arm (stock cannot load a fork-built engine, and its exporter does not fit 32 GB). Engine: INT4 experts, FP16 attention, dense MLP and lm_head, FP16 bounded KV, MTP with tree 16, host prefix cache 4 GiB (see `poc/config/gemma4-26b.sh` for the reason behind every setting).
+
+**Reading the numbers.** The HumanEval rounds differ (160 and 157 of 164; greedy output is not bit-reproducible between identical runs). The decode rate in the long-context rows is *not* a steady decode speed: the answer is a few tokens long and prompt-lookup drafting accepts almost all of it, so it rises with the prompt (29 -> 75 tok/s); use the replay and the HumanEval generation rows for speed. The warm rows at 4,096 tokens and above show the prefix cache (cold 2.61 s -> warm 1.30 s at 4k; 5.13 -> 1.02 s at 7.5k); a 2,048-token prompt is one pass and gets no reuse.
+
+| | optimised |
+|---|---:|
+| Prefill of a fresh ~1.5k-token prompt (cold), tokens/s (higher is better) | 1,556 |
+| Same prompt again (warm, prefix reused), time to first token, seconds (lower is better) | 0.821 |
+| Decode, first request of a prompt (cold), tokens/s (higher is better) | 34.4 |
+| Decode, same prompt again (warm), tokens/s (higher is better) | 48.2 |
+| Replay of 60 recorded requests, seconds (lower is better) | 246.0 |
+| Replay output tokens in total (the stacks do not answer with the same length) | 9,842 |
+| HumanEval generation, tokens/s (higher is better) | 60.8 |
+
+HumanEval pass@1 (greedy, public benchmark), per round: optimised 160/164 / 157/164.
+
+#### Long context (prompts of the given length, greedy; cold = nothing to reuse, warm = same prompt again, needles = exact retrieval of 3 planted facts)
+
+| prompt tokens | metric | optimised |
+|---:|---|---:|
+| 2,048 (actual 2,011) | cold time to first token, s | 1.29 |
+|  | cold prompt tokens/s | 1,559 |
+|  | warm time to first token, s | 1.16 |
+|  | decode tokens/s at this context | 29.2 |
+|  | needles correct of 3 | 3 |
+| 4,096 (actual 4,092) | cold time to first token, s | 2.61 |
+|  | cold prompt tokens/s | 1,565 |
+|  | warm time to first token, s | 1.30 |
+|  | decode tokens/s at this context | 50.1 |
+|  | needles correct of 3 | 3 |
+| 7,500 (actual 7,496) | cold time to first token, s | 5.13 |
+|  | cold prompt tokens/s | 1,462 |
+|  | warm time to first token, s | 1.02 |
+|  | decode tokens/s at this context | 75.0 |
+|  | needles correct of 3 | 3 |
 
 ### RTX 4060 8 GB (`PROFILE=dgpu`), optimised arm only
 
