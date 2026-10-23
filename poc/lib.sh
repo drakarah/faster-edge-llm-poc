@@ -44,7 +44,7 @@ PY
   touch $T/.complete
 }
 
-quantise_gemma() {
+quantise_gemma4() {
   need_memory_gb 40
   prepare_text
   local T=$DATA/text PY=$DATA/venv-llmc/bin/python TOOLS=$POC/tools
