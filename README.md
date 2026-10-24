@@ -4,7 +4,7 @@
 
 A 35-billion-parameter model on an 8 GB laptop GPU is normally a patience exercise: most of the weights live in system RAM and the CPU does a lot of the work. This project keeps the weights in RAM but streams only what each step needs to the GPU, and a set of tricks makes that streaming cheap. Same laptop, same 60-request workload:
 
-| Qwen3.6-35B-A3B on an RTX 4060 laptop (8 GB, 31 GB RAM) | time for the 60 requests | decode | prompt processing |
+| Qwen3.6-35B-A3B on an RTX 4060 laptop (8 GB, 31 GB RAM) | time for the 60 requests | decode, 300 tokens after a ~10-token prompt | prompt processing, one 3,000-token prompt |
 |---|---:|---:|---:|
 | llama.cpp (Q4_K_M, experts on the CPU, `--n-cpu-moe` tuned) | 1,367 s | 17-23 tok/s | 350-460 tok/s |
 | **this project, exact routing** (lossless apart from the INT4 weights) | **345 s** (4.0x) | 49-50 tok/s | ~1,500 tok/s |
@@ -12,7 +12,7 @@ A 35-billion-parameter model on an 8 GB laptop GPU is normally a patience exerci
 
 ![Replay time, Qwen3.6-35B-A3B on an RTX 4060 laptop](docs/replay-qwen36.svg)
 
-The workload is a recording of a real tool-calling app (long prompts, JSON tool calls), not a single-prompt decode test. How the numbers were measured, what is not apples to apples, and everything that did not work are further down.
+The workload is a recording of a real tool-calling app (prompts of 300 to 7,500 tokens, median about 2,700, JSON tool calls), not a single-prompt decode test. A tokens-per-second figure means nothing without the prompt length it was measured at, so both columns name it; decode speed at longer contexts is in the long-context table further down. How the numbers were measured, what is not apples to apples, and everything that did not work are further down.
 
 ## Quick start
 
