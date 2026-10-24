@@ -34,7 +34,10 @@ SERVE_ARGS="--tool-call-parser generic"   # no speculation flags; prefix reuse s
 #  EDGELLM_MOE_PREFILL_OVERLAP=1  the experts of layer L+1 are copied while layer L computes (prefill floor 1.9 s per pass; overlap reaches 92% of it)
 #  EDGELLM_MOE_CACHE_BIAS=0.5     LOSSY (decode only): the router adds 0.5 to the logits of experts already in the GPU cache before the top-8 choice: 65% fewer cache misses for +0.09% perplexity,
 #                                 needles 40/40 at 2k and 6k tokens; replay-60 363 -> 270 s, decode 49 -> 62 tok/s. 0 = exact routing, 1 = faster (245 s) and +1.5% perplexity.
-SERVE_ENV="EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe EDGELLM_EMBEDDING_ON_HOST=1 EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MOE_CACHE_SLOTS=auto EDGELLM_MOE_CACHE_RESERVE_MB=250 EDGELLM_MOE_PREFILL_OVERLAP=1 EDGELLM_MOE_CACHE_BIAS=${CACHE_BIAS:-0.5}"
+#  EDGELLM_MOE_TAIL_SKIP=0        LOSSY, opt-in (TAIL_SKIP in .env): keep the top N experts always and do not fetch a cache-missing expert ranked N+1 or lower, dropping its weight. A LOWER N skips more.
+#                                 With CACHE_BIAS=0 (exact routing otherwise): TAIL_SKIP=6 gives decode 47.5 -> 55.9 tok/s (+18%) for +0.04% perplexity (inside the noise), TAIL_SKIP=5 61.5 tok/s (+29%) for +0.26%.
+#                                 With CACHE_BIAS=0.5: TAIL_SKIP=6 65.6 tok/s (+9% over bias alone) for +0.83% perplexity in total, TAIL_SKIP=5 68.6 tok/s. Needles 27/27 at 2k, 4k and 6k tokens for both combinations tested (CACHE_BIAS=0 + 6, 0.5 + 6).
+SERVE_ENV="EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe EDGELLM_EMBEDDING_ON_HOST=1 EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MOE_CACHE_SLOTS=auto EDGELLM_MOE_CACHE_RESERVE_MB=250 EDGELLM_MOE_PREFILL_OVERLAP=1 EDGELLM_MOE_CACHE_BIAS=${CACHE_BIAS:-0.5} EDGELLM_MOE_TAIL_SKIP=${TAIL_SKIP:-0}"
 DRAFTER_INT4_MLP=0
 # Prebuilt export published for this model: `docker compose up` downloads it and only builds the engine (no 26 GB-RAM export, no hours of GPTQ). QUANTIZE=1 redoes the quantisation locally from the original weights.
 HF_ONNX_REPO=${HF_ONNX_REPO:-drakarah/Qwen3.6-35B-A3B-EdgeLLM-INT4}   # INT8-KV export (INT4 weights); downloaded instead of quantising

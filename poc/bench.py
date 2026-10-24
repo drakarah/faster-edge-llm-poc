@@ -88,9 +88,12 @@ def content(resp):
 
 def replay(url, workload, calls):
     recs = [r for r in map(json.loads, open(workload)) if r.get("status") == 200][:calls]
+    skip = {int(x) for x in os.environ.get("BENCH_REPLAY_SKIP", "").split(",") if x.strip()}   # request indices to leave out (to time the requests another server accepted)
+    recs = [r for i, r in enumerate(recs) if i not in skip]
     times, answers, ctoks, ptoks, errors = [], [], 0, 0, []
     for i, r in enumerate(recs):
         body = dict(r["request"]); body["model"] = "local"; body["stream"] = False; body["temperature"] = 0
+        body.update(json.loads(os.environ.get("BENCH_EXTRA_BODY") or "{}"))
         t0 = time.perf_counter()
         try:
             with post(url, body) as f:
@@ -140,6 +143,7 @@ def longctx(url, lengths):
                 msgs = [{"role": "user", "content": long_prompt(n, uuid.uuid4(), f"What is the valve in bay {k} set to? Answer with the number only.")}]
                 first_msgs = first_msgs or msgs
                 body = {"model": "local", "messages": msgs, "max_tokens": 12, "temperature": 0}
+                body.update(json.loads(os.environ.get("BENCH_EXTRA_BODY") or "{}"))
                 t0 = time.perf_counter()
                 with post(url, body) as f:
                     resp = json.loads(f.read())

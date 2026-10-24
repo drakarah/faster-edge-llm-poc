@@ -29,6 +29,7 @@ def load_tasks(cache):
 def ask(url, prompt, max_tokens):
     body = {"model": "local", "messages": [{"role": "user", "content": PROMPT.format(prompt=prompt)}],
             "max_tokens": max_tokens, "temperature": 0}
+    body.update(json.loads(os.environ.get("BENCH_EXTRA_BODY") or "{}"))   # e.g. enable_thinking false for servers that think by default
     req = urllib.request.Request(url + "/v1/chat/completions", json.dumps(body).encode(),
                                  {"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=900) as f:
