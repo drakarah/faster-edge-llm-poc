@@ -12,7 +12,7 @@ A 35-billion-parameter model on an 8 GB laptop GPU is normally a patience exerci
 
 ![Replay time, Qwen3.6-35B-A3B on an RTX 4060 laptop](docs/replay-qwen36.svg)
 
-The workload is a recording of a real tool-calling app (prompts of 300 to 7,500 tokens, median about 2,700, JSON tool calls), not a single-prompt decode test. A tokens-per-second figure means nothing without the prompt length it was measured at, so both columns name it; decode speed at longer contexts is in the long-context table further down. How the numbers were measured, what is not apples to apples, and everything that did not work are further down.
+The workload is a recording of a real app that turns user requests into SQL and chart specifications (60 independent requests, prompts of 300 to 7,500 tokens, median about 2,700, JSON output). The requests share no growing conversation, so it says nothing about agentic coding, where each turn extends the previous prompt; that needs prefix reuse and long context and is measured separately. A tokens-per-second figure means nothing without the prompt length it was measured at, so both columns name it; decode speed at longer contexts is in the long-context table further down. How the numbers were measured, what is not apples to apples, and everything that did not work are further down.
 
 ## Quick start
 

@@ -35,6 +35,7 @@ def stream_chat(url, messages, max_tokens):
     """Returns (ttft_s, decode_s, completion_tokens, prompt_tokens)."""
     body = {"model": "local", "messages": messages, "max_tokens": max_tokens, "temperature": 0, "stream": True,
             "stream_options": {"include_usage": True}}
+    body.update(json.loads(os.environ.get("BENCH_EXTRA_BODY") or "{}"))   # e.g. {"chat_template_kwargs": {"enable_thinking": false}} for servers that think by default
     t0 = time.perf_counter(); first = last = None; pt = ct = 0
     with post(url, body) as f:
         for raw in f:
