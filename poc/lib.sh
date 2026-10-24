@@ -98,6 +98,24 @@ quantise_qwen() {
     --quantization int4_awq --lm_head_quantization int4_awq --device $DEV --num_samples $SAMPLES
 }
 
+quantise_qwen36moe() {
+  # Two layer-wise passes (one decoder layer at a time, the 67 GB BF16 checkpoint is never resident): GPTQ of the routed experts, then GPTQ of every dense linear on top of them.
+  # The output checkpoint is hard links of the BF16 shards plus the quantised files, so it costs about 30 GB on top of the download.
+  need_memory_gb 40
+  prepare_text
+  mkdir -p $WORK
+  [ -f $WORK/experts/.done ] || {
+    step "layer-wise GPTQ of the routed experts (INT4 g128, $GPTQ_SAMPLES samples)"
+    rm -rf $WORK/experts
+    python $POC/tools/gptq_experts_layerwise_qwen36.py $BASE $WORK/experts --text-dir $DATA/text --samples $GPTQ_SAMPLES --seq-len 1024
+    touch $WORK/experts/.done
+  }
+  step "layer-wise GPTQ of the dense linears ($DENSE_PARTS)"
+  rm -rf $CKPT
+  python $POC/tools/gptq_dense_layerwise_qwen36.py $BASE $WORK/experts $CKPT --text-dir $DATA/text --parts $DENSE_PARTS --samples $GPTQ_SAMPLES --seq-len 1024 --holdout 32
+  rm -rf $WORK $BASE
+}
+
 build_stamp() {  # $1 pinned commit of the stack: changes when the image is rebuilt on another commit or the model config changes
   echo "$1 $(md5sum $POC/$CONFIG | cut -c1-12)"
 }

@@ -2,7 +2,7 @@
 POC=/poc
 DATA=${DATA:-/data}
 PROFILE=${PROFILE:-orin}                 # orin | dgpu
-MODEL=${MODEL:-gemma4-e4b}               # gemma4-e4b | gemma4-12b | gemma4-26b | qwen35-4b
+MODEL=${MODEL:-gemma4-e4b}               # gemma4-e4b | gemma4-12b | gemma4-26b | qwen35-4b | qwen36-35b
 PORT=${PORT:-8000}                       # port of the optimised server that stays up at the end (`serve`)
 BENCH_PORT=${BENCH_PORT:-18080}
 BENCH_CALLS=${BENCH_CALLS:-60}           # recorded requests replayed per run
