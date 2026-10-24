@@ -72,7 +72,7 @@ Pick another model with `MODEL=` in `.env` (see `.env.example`). Gemma needs a H
 
 1. **Experts stay in RAM, the GPU keeps a cache of the ones in use.** Each layer has a small cache of experts on the GPU; a step copies only what is missing.
 2. **Prompts overlap compute and copy.** While layer N computes, the experts of layer N+1 are already on their way, and the ones that are already in the decode cache are copied inside the GPU instead of over PCIe.
-3. **The router prefers experts that are already cached** (optional, `CACHE_BIAS`): about 65% fewer cache misses for about +0.1 to +0.3% perplexity (two measurements: +0.09% and +0.27%; the test noise is about 0.15%). A second option, `TAIL_SKIP`, does not fetch low-ranked experts that are missing from the cache: with exact routing otherwise it gives +18% decode for +0.04% perplexity.
+3. **The router prefers experts that are already cached** (optional, `CACHE_BIAS`): about 65% fewer cache misses for about +0.1 to +0.3% perplexity (two measurements: +0.09% and +0.27%; the test noise is about 0.15%). Perplexity understates the change: against the exact model the top-1 token differs at about 5% of positions (KL 0.022, teacher-forced on 32 x 1,024 tokens; many are near-ties). Plain exact routing remains one setting away (`CACHE_BIAS=0`). A second option, `TAIL_SKIP`, does not fetch low-ranked experts that are missing from the cache: with exact routing otherwise it gives +18% decode for +0.04% perplexity.
 4. **Everything is INT4 with calibrated quantisation** (GPTQ), an INT8 KV cache and fused kernels, so more of the cache fits in 8 GB.
 5. **It is a fork of NVIDIA's TensorRT Edge-LLM**, so all of it runs as ordinary TensorRT plugins; no custom runtime.
 
