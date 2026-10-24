@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 250" width="800" height="250" role="img" aria-labelledby="t d">
+  <title id="t">Time to answer 60 recorded requests, Qwen3.6-35B-A3B on an RTX 4060 laptop</title>
+  <desc id="d">llama.cpp 1,367 seconds; this project with exact routing 363 seconds (3.8 times faster); this project with the default cache-aware routing 270 seconds (5.1 times faster). Shorter is better.</desc>
+  <style>
+    :root { --bg:#ffffff; --ink:#1f2328; --muted:#59636e; --grid:#d8dee4; --base:#8c959f; --ours:#1a6ce0; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --ink:#e6edf3; --muted:#9198a1; --grid:#30363d; --base:#6e7781; --ours:#58a6ff; } }
+    text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); }
+    .m { fill: var(--muted); font-size: 13px; }
+    .l { font-size: 15px; }
+    .v { font-size: 15px; font-weight: 600; }
+  </style>
+  <rect width="800" height="250" fill="var(--bg)"/>
+  <text x="24" y="30" font-size="16" font-weight="600">Time to answer 60 recorded requests (seconds, shorter is better)</text>
+  <text x="24" y="50" class="m">Qwen3.6-35B-A3B, RTX 4060 laptop 8 GB, 31 GB RAM, same workload</text>
+  <line x1="250" y1="66" x2="250" y2="226" stroke="var(--grid)" stroke-width="1"/>
+  <text x="24" y="104" class="l">llama.cpp (experts on CPU)</text>
+  <rect x="250" y="86" width="466" height="28" rx="4" fill="var(--base)"/>
+  <text x="726" y="106" class="v" text-anchor="end" fill="#fff" style="fill:#fff">1,367 s</text>
+  <text x="24" y="152" class="l">This project, exact routing</text>
+  <rect x="250" y="134" width="124" height="28" rx="4" fill="var(--ours)" opacity="0.7"/>
+  <text x="384" y="154" class="v">363 s</text><text x="446" y="154" class="m">3.8x faster</text>
+  <text x="24" y="200" class="l">This project, default</text>
+  <rect x="250" y="182" width="92" height="28" rx="4" fill="var(--ours)"/>
+  <text x="352" y="202" class="v">270 s</text><text x="414" y="202" class="m">5.1x faster</text>
+</svg>

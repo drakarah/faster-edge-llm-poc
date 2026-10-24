@@ -11,7 +11,7 @@
 ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:26.09-py3
 FROM ${BASE_IMAGE}
 
-ARG PROFILE=orin
+ARG PROFILE=dgpu
 ARG GPU_ARCH=
 ARG BUILD_JOBS=8
 ARG STOCK_REPO=https://github.com/NVIDIA/TensorRT-Edge-LLM.git
@@ -27,8 +27,10 @@ COPY poc/build/pins.txt /tmp/pins.txt
 RUN pip install --no-cache-dir -r /tmp/pins.txt
 
 COPY poc/build/build_edgellm.sh /usr/local/bin/build_edgellm.sh
-RUN git clone "${STOCK_REPO}" /opt/stock && git -C /opt/stock checkout "${STOCK_REF}" \
-    && git -C /opt/stock submodule update --init --recursive
+# The stock stack is only built for the side-by-side comparison (WITH_STOCK=1, the `compare` compose profile); serving does not need it.
+ARG WITH_STOCK=0
+RUN if [ "${WITH_STOCK}" = 1 ]; then git clone "${STOCK_REPO}" /opt/stock && git -C /opt/stock checkout "${STOCK_REF}" \
+    && git -C /opt/stock submodule update --init --recursive; fi
 RUN FAST_PIN=$( [ "${PROFILE}" = dgpu ] && echo "${FAST_REF_DGPU}" || echo "${FAST_REF}" ) && echo "${FAST_PIN}" > /opt/fast_ref \
     && git clone "${FAST_REPO}" /opt/fast && git -C /opt/fast checkout "${FAST_PIN}" \
     && git -C /opt/fast submodule update --init --recursive
@@ -36,7 +38,7 @@ RUN FAST_PIN=$( [ "${PROFILE}" = dgpu ] && echo "${FAST_REF_DGPU}" || echo "${FA
 # Both stacks are compiled the same way. Only the fast stack gets two extra build options: the INT4 GEMM that applies the group
 # scale to FP32 partial sums once per quantisation group (EDGELLM_INT4_GEMM_GROUP_FLUSH, fewer instructions per tensor op), and on
 # the discrete GPU FP16 accumulation in the INT4 GEMM (twice the tensor rate on GeForce parts; no gain on a Jetson, so it is left off there).
-RUN PROFILE=${PROFILE} GPU_ARCH=${GPU_ARCH} BUILD_JOBS=${BUILD_JOBS} build_edgellm.sh /opt/stock
+RUN if [ "${WITH_STOCK}" = 1 ]; then PROFILE=${PROFILE} GPU_ARCH=${GPU_ARCH} BUILD_JOBS=${BUILD_JOBS} build_edgellm.sh /opt/stock; fi
 RUN env PROFILE=${PROFILE} GPU_ARCH=${GPU_ARCH} BUILD_JOBS=${BUILD_JOBS} \
     EDGELLM_INT4_GEMM_GROUP_FLUSH=1 $( [ "${PROFILE}" = dgpu ] && echo EDGELLM_INT4_GEMM_FP16_ACC_MIN_BM=64 || true ) build_edgellm.sh /opt/fast
 
@@ -44,4 +46,4 @@ COPY poc /poc
 ENV PYTHONDONTWRITEBYTECODE=1 PROFILE=${PROFILE} STOCK_REF=${STOCK_REF}
 WORKDIR /poc
 ENTRYPOINT ["/poc/run.sh"]
-CMD ["all"]
+CMD ["up"]

@@ -1,38 +1,114 @@
 # faster-llm-poc
 
-Reproduce the speed-ups of our [TensorRT Edge-LLM fork](https://github.com/drakarah/TensorRT-Edge-LLM) on your own machine with one command.
+**Run big language models fast on a small NVIDIA GPU, behind an OpenAI-compatible API you can plug into any chat UI.**
 
-It builds **two stacks side by side** from source, on your GPU, and times them on the same quantised checkpoint with the same prompts:
+A 35-billion-parameter model on an 8 GB laptop GPU is normally a patience exercise: most of the weights live in system RAM and the CPU does a lot of the work. This project keeps the weights in RAM but streams only what each step needs to the GPU, and a set of tricks makes that streaming cheap. Same laptop, same 60-request workload:
 
-| | what it is |
-|---|---|
-| **stock** | [NVIDIA/TensorRT-Edge-LLM](https://github.com/NVIDIA/TensorRT-Edge-LLM) `main` at a pinned commit, used as upstream documents it: `tensorrt-edgellm-serve <checkpoint>` with MTP speculative decoding and context reuse, building its own engine; its draft-tree flags are set to the best values we found (see below), not to its default |
-| **optimised** | the fork's `dev` branch at a pinned commit (upstream plus the optimisations: fused INT4 projections, INT8 KV cache, split-KV decode attention, tree + suffix drafting, prefix reuse for hybrid models, a faster prompt-pass GEMM and attention, ...) with engine and server settings tuned per GPU |
+| Qwen3.6-35B-A3B on an RTX 4060 laptop (8 GB, 31 GB RAM) | time for the 60 requests | decode | prompt processing |
+|---|---:|---:|---:|
+| llama.cpp (Q4_K_M, experts on the CPU, `--n-cpu-moe` tuned) | 1,367 s | 17-23 tok/s | 350-460 tok/s |
+| **this project, exact routing** (lossless apart from the INT4 weights) | **363 s** (3.8x) | 49 tok/s | ~1,500 tok/s |
+| **this project, default** (cache-aware routing, +0.09% perplexity) | **270 s** (5.1x) | 62-63 tok/s | ~1,500 tok/s |
 
-Nothing is downloaded prebuilt except the base image and the model weights. Engines are built on your machine (a TensorRT engine only loads on the GPU and TensorRT version that built it).
+![Replay time, Qwen3.6-35B-A3B on an RTX 4060 laptop](docs/replay-qwen36.svg)
 
-## Run it
+The workload is a recording of a real tool-calling app (long prompts, JSON tool calls), not a single-prompt decode test. How the numbers were measured, what is not apples to apples, and everything that did not work are further down.
+
+## Quick start
+
+You need Docker with the NVIDIA container runtime and an NVIDIA GPU with 8 GB or more (the default model needs about 31 GB of system RAM and 60 GB of free disk).
 
 ```bash
-git clone git@github.com:drakarah/faster-llm-poc.git && cd faster-llm-poc
-cp .env.example .env        # set PROFILE, MODEL and HF_TOKEN (Gemma is gated: accept its licence on Hugging Face first)
+git clone https://github.com/drakarah/faster-llm-poc.git && cd faster-llm-poc
 docker compose up
 ```
 
-That is all. `docker compose up` builds the image, then runs three services in order:
+The first start downloads the model and builds the engine for your GPU (it says what it is doing; a TensorRT engine only loads on the GPU that built it). Later starts take about a minute. When it prints that the server is ready, the API is at `http://localhost:8000/v1`.
 
-1. **builder**: downloads the model, quantises it (GPTQ INT4 for Gemma, Edge-LLM's own INT4-AWQ for Qwen), exports and builds the optimised engine, and lets the stock server build its own.
+## Use it from your chat UI
+
+Any client that speaks the OpenAI API works: Open WebUI, LM Studio's remote mode, SillyTavern, Continue, Cline, `curl`. Set:
+
+| setting | value |
+|---|---|
+| base URL | `http://localhost:8000/v1` |
+| API key | anything (not checked) |
+| model name | `local` |
+
+```bash
+curl http://localhost:8000/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"local","messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+Tool calls, JSON-schema output and streaming are supported.
+
+## Measure it yourself
+
+With the server running:
+
+```bash
+docker compose run --rm bench
+```
+
+It replays the recorded workload, runs the public HumanEval set and a few long prompts through the running server, and prints a table. It does not load a second copy of the model, so it works on an 8 GB card.
+
+To compare against llama.cpp on your machine: stop the server (`docker compose stop serve`), start llama.cpp's server with the settings in [the technical details](#how-the-llamacpp-baseline-was-run), and point the same benchmark at it:
+
+```bash
+BENCH_URL=http://host.docker.internal:8080 BENCH_LABEL=stock docker compose run --rm --no-deps bench
+```
+
+## Models and GPUs
+
+| model | tested on | what you get |
+|---|---|---|
+| **Qwen3.6-35B-A3B** (default; hybrid mixture of experts) | RTX 4060 laptop 8 GB | the numbers above |
+| Gemma 4 26B-A4B (mixture of experts) | RTX 4060 laptop 8 GB, Jetson AGX Orin 32 GB | measured, see the results below |
+| Gemma 4 12B and E4B, Qwen3.5-4B | RTX 4060 laptop 8 GB, Jetson AGX Orin 32 GB | measured, side by side with stock NVIDIA Edge-LLM |
+
+Pick another model with `MODEL=` in `.env` (see `.env.example`). Gemma needs a Hugging Face token of an account that accepted its licence.
+
+## Why it is fast, in five lines
+
+1. **Experts stay in RAM, the GPU keeps a cache of the ones in use.** Each layer has a small cache of experts on the GPU; a step copies only what is missing.
+2. **Prompts overlap compute and copy.** While layer N computes, the experts of layer N+1 are already on their way, and the ones that are already in the decode cache are copied inside the GPU instead of over PCIe.
+3. **The router prefers experts that are already cached** (optional, `CACHE_BIAS`): about 65% fewer cache misses for a 0.09% change in perplexity.
+4. **Everything is INT4 with calibrated quantisation** (GPTQ), an INT8 KV cache and fused kernels, so more of the cache fits in 8 GB.
+5. **It is a fork of NVIDIA's TensorRT Edge-LLM**, so all of it runs as ordinary TensorRT plugins; no custom runtime.
+
+The fork lives at [drakarah/TensorRT-Edge-LLM](https://github.com/drakarah/TensorRT-Edge-LLM); every change below links to the branch that holds it.
+
+---
+
+## Technical details
+
+Everything below is reference material: settings, the full list of changes with measurements, results per machine, and what did not work.
+
+<details>
+<summary><b>Settings, requirements and the side-by-side comparison with stock Edge-LLM</b></summary>
+
+### The side-by-side comparison with stock NVIDIA Edge-LLM
+
+```bash
+git clone https://github.com/drakarah/faster-llm-poc.git && cd faster-llm-poc
+cp .env.example .env        # set MODEL, PROFILE and HF_TOKEN (Gemma is gated)
+docker compose --profile compare run --rm compare
+```
+
+The `compare` service builds the image with both stacks, then runs three steps:
+
+1. **builder**: downloads the model, quantises it (GPTQ INT4 for Gemma, Edge-LLM's own INT4-AWQ for Qwen3.5), exports and builds the optimised engine, and lets the stock server build its own.
 2. **bench**: starts stock, times it, stops it, starts the optimised stack, times it, and repeats (`BENCH_ROUNDS`, default 2, so clock or thermal drift cancels). Prints a table and writes it to `data/results/`.
-3. **serve**: leaves the optimised server running at `http://localhost:8000/v1` (OpenAI-compatible) so you can try it yourself.
+3. **serve**: leaves the optimised server running.
 
-Every step resumes from `./data`, so an interrupted run continues where it stopped. To start only the optimised server (no benchmark) use `docker compose up --no-deps serve`: plain `docker compose up serve` starts the builder and the benchmark first. A new benchmark run moves earlier results into `data/results/previous-<time>/` instead of deleting them.
+Every step resumes from `./data`, so an interrupted run continues where it stopped. A new benchmark run moves earlier results into `data/results/previous-<time>/` instead of deleting them.
 
 ### Settings
 
 | variable | values | |
 |---|---|---|
-| `PROFILE` | `orin` (default), `dgpu` | `orin`: Jetson AGX Orin (sm_87). `dgpu`: discrete GPU, x86_64 or arm64; set `GPU_ARCH` (default 89 = RTX 40-series) |
-| `MODEL` | `gemma4-e4b` (default), `gemma4-12b`, `qwen35-4b`, `gemma4-26b` (optimised arm only: stock Edge-LLM cannot load an engine built by the fork nor export the 51 GB checkpoint in 32 GB of RAM; `PROFILE=dgpu` uses `config/gemma4-26b.dgpu.sh` and the dgpu pin, and has not been run end to end from a clean data dir yet) | the models we measured |
+| `PROFILE` | `dgpu` (default), `orin` | `dgpu`: discrete GPU, x86_64 or arm64; set `GPU_ARCH` (default 89 = RTX 40-series). `orin`: Jetson AGX Orin (sm_87) |
+| `MODEL` | `qwen36-35b` (default, dgpu only), `gemma4-e4b`, `gemma4-12b`, `qwen35-4b`, `gemma4-26b` (optimised arm only: stock Edge-LLM cannot load an engine built by the fork nor export the 51 GB checkpoint in 32 GB of RAM; `PROFILE=dgpu` uses `config/gemma4-26b.dgpu.sh` and the dgpu pin, and has not been run end to end from a clean data dir yet) | the models we measured |
 | `HF_TOKEN` | token | needed for Gemma only |
 | `BENCH_CALLS`, `BENCH_ROUNDS` | 60, 2 | replayed requests per round, rounds per stack |
 | `BENCH_HUMANEVAL` | 164 | HumanEval problems per run (0 skips); public benchmark, pass@1 and tokens/s |
@@ -48,6 +124,29 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 * RAM + swap of **at least 40 GB** for the quantisation and 28 GB for the export (a 32 GB Jetson needs about 24 GB of swap; the builder stops with the exact commands if it is short). The 12B needs more (about 50 GB) because the bf16 model is expanded for calibration.
 * Free disk: about 60 GB (gemma4-e4b) to 120 GB (gemma4-12b), including the 25 GB base image; the 26B needs about 150 GB (52 GB download, 49 GB re-sharded copy while the download is deleted, 18 GB engine with sidecars; the dgpu profile: 13 GB of expert and embedding files twice during the build, engine about 13 GB).
 * Time on first run (AGX Orin): image build about 1-2 h, E4B quantisation and engines a few hours, the benchmark about 20 min. Later runs only repeat the benchmark.
+### Quantising yourself (`QUANTIZE=1`)
+
+By default `docker compose up` downloads the published export of the model and only builds the engine. `QUANTIZE=1` (in `.env` or the environment) ignores that and runs the whole pipeline on your machine from the original weights: the layer-wise GPTQ of the experts and of the dense layers (`poc/tools/`), the export and the engine build. It needs the full download (67 GB for Qwen3.6-35B-A3B), 40 GB of RAM + swap and a few hours. Models without a published export (the Gemma models, whose licence does not allow redistributing derivatives) always take this path.
+
+### If the download fails (Hugging Face rate limits)
+
+The prebuilt export is about 18 GB. The free Hugging Face tier rate-limits (HTTP 429), so the downloader uses two parallel connections, retries with backoff (honouring `Retry-After`) for up to 12 attempts, and resumes partial files, so running `docker compose up` again continues where it stopped. In order, the fallbacks are:
+
+1. **A free Hugging Face token** (`HF_TOKEN=` in `.env`) raises the limits.
+2. **A mirror**: `ONNX_MIRROR_URL=https://your.host/path` for any plain HTTPS host with range requests (object store, web server, release page) holding a copy of the export plus a `manifest.txt` made with `poc/tools/make_mirror_manifest.py`. Files are resumed with curl and verified by SHA-256.
+3. **Your own download**: fetch the files by any means (browser, `git lfs`, torrent, a USB stick) into a directory and set `ONNX_DIR=` to it (it must contain `llm/`). Nothing is downloaded then.
+4. **`QUANTIZE=1`**: quantise on your machine from the original weights. That download also comes from Hugging Face (67 GB), so it only helps if the limit was specific to the export repository.
+
+### How the llama.cpp baseline was run
+
+`ghcr.io/ggml-org/llama.cpp:server-cuda`, Unsloth's `Qwen3.6-35B-A3B-UD-Q4_K_M.gguf` (22 GB), `-ngl 99 --n-cpu-moe N --flash-attn on` with a q8_0 KV cache, context 12,288, `--threads 6 --no-mmap`, `--jinja --chat-template-kwargs '{"enable_thinking":false}'` (the thinking stream otherwise empties the benchmark's content stream). `N` was swept (30 and 40 gave the best results, within noise of each other). The recorded replay of 60 requests took 1,367 s. Sustained decode was 17-23 tok/s: the first decode after loading is faster (up to 35 tok/s, probably thermal headroom, not verified) and the same prompt twice can differ by up to 40%. Prompt processing was 350-460 tok/s in probes; llama.cpp's repeated-prompt numbers of 1,600-2,100 tok/s are its prompt cache, not prompt processing.
+
+What is not apples to apples: llama.cpp ran Unsloth's mixed Q4_K_M quantisation, this project runs its own GPTQ INT4 (experts and all dense layers). Quality checks for ours: HumanEval 155/164 (150-156 for every variant tried), exact retrieval of planted facts 80/80 at 2k and 4k tokens, and +0.09% perplexity for the default cache-aware routing (+1.5% at the most aggressive setting, which is faster still: 245 s). Exact routing (`CACHE_BIAS=0`) is lossless apart from the weights.
+
+</details>
+
+<details>
+<summary><b>What the fork changes, with every measurement (and the branch that holds each change)</b></summary>
 
 ## What the optimised build changes compared with stock NVIDIA TensorRT-Edge-LLM
 
@@ -149,7 +248,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | Routed experts stay in pinned host memory; per-layer GPU expert cache (`EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe`, `EDGELLM_MOE_CACHE_SLOTS=auto`, `EDGELLM_MOE_STAGE_EXPERTS=2` at build) | the MoE plugin copies the experts a step routes to into private device buffers (prefill) or a per-layer slot cache (decode) | RTX 4060, 26B: decode 14 tok/s with no cache -> 54 with 45 slots of 128 (83.75% hit rate) | the 11.4 GB of INT4 experts leave VRAM; the cache size is derived from the free VRAM at the first decode step | yes (dgpu profile) | [`rtx4060/moe-prefill-stage-overlap`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/rtx4060/moe-prefill-stage-overlap) ([6359ac5](https://github.com/drakarah/TensorRT-Edge-LLM/commit/6359ac5), [25238c2](https://github.com/drakarah/TensorRT-Edge-LLM/commit/25238c2)) |
 | Prefill expert prefetch overlap (`EDGELLM_MOE_PREFILL_OVERLAP=1`) | copies the experts of layer L+1 while layer L computes | RTX 4060, 26B: cold prefill 4k +59%; Qwen3.6: a prefill pass floors at 1.9 s (all experts over PCIe at about 8.5 GB/s), overlap reaches 92% of it | one second 396 MiB staging buffer (about 5 cache slots per layer on Qwen3.6) | yes (dgpu profile) | [`rtx4060/moe-prefill-stage-overlap`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/rtx4060/moe-prefill-stage-overlap) ([6359ac5](https://github.com/drakarah/TensorRT-Edge-LLM/commit/6359ac5)) |
 | Prefill chunk ring (`EDGELLM_MOE_PREFILL_CHUNK=32`) | prefetches the experts in chunks into a 3 x 64 MiB ring instead of two whole-layer buffers | RTX 4060, 26B: +6 cache slots, replay-60 346.9 -> 326.0 s. **Not used for Qwen3.6**: replay -12% but decode -17% (cause not found) | 3 x 64 MiB instead of 2 x 386 MiB | 26B only | [`rtx4060/moe-prefill-stage-overlap`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/rtx4060/moe-prefill-stage-overlap) ([d25ebf5](https://github.com/drakarah/TensorRT-Edge-LLM/commit/d25ebf5)) |
-| Cache-aware expert routing (`EDGELLM_MOE_CACHE_BIAS`, default 0.5) **lossy, decode only** | the router adds beta to the logits of experts that are already in the GPU cache before choosing the top 8; the combine weights stay the softmax of the original logits | Qwen3.6, RTX 4060: 65% fewer cache misses at beta 0.5 for +0.09% perplexity (beta 1: 85% fewer, +1.5%); replay-60 363.3 -> 269.7 s (beta 1: 245.2 s); decode 49.4 -> 62.1 tok/s; needles 40/40 at 2k and 6k tokens. Measured on Qwen3.6 only: set 0 for exact routing on other models | none | yes (Qwen3.6, beta 0.5) | [`rtx4060/moe-cache-aware-routing`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/rtx4060/moe-cache-aware-routing) ([cf3d3cf](https://github.com/drakarah/TensorRT-Edge-LLM/commit/cf3d3cf), [dc94344](https://github.com/drakarah/TensorRT-Edge-LLM/commit/dc94344)) |
+| Cache-aware expert routing (`EDGELLM_MOE_CACHE_BIAS`, default 0.5) **lossy, decode only** | the router adds beta to the logits of experts that are already in the GPU cache before choosing the top 8; the combine weights stay the softmax of the original logits | Qwen3.6, RTX 4060: 65% fewer cache misses at beta 0.5 for +0.09% perplexity (beta 1: 85% fewer, +1.5%); replay-60 363.3 -> 269.7 s (beta 1: 245.2 s); decode 49.4 -> 62.1 tok/s; needles 40/40 at 2k and 6k tokens at beta 0.5 (beta 1: 40/40 and 39/40). Measured on Qwen3.6 only: set 0 for exact routing on other models | none | yes (Qwen3.6, beta 0.5) | [`rtx4060/moe-cache-aware-routing`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/rtx4060/moe-cache-aware-routing) ([cf3d3cf](https://github.com/drakarah/TensorRT-Edge-LLM/commit/cf3d3cf), [dc94344](https://github.com/drakarah/TensorRT-Edge-LLM/commit/dc94344)) |
 | Expert-cache fill grid sized by the possible misses (tokens x top-k) instead of the slot count | the fill kernel launched one block per slot even when at most 8 experts can miss | Qwen3.6: empty-call floor 137 -> 19 us per layer; decode 45.8 -> 49.7 tok/s with exact routing | none | yes | [`rtx4060/moe-cache-aware-routing`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/rtx4060/moe-cache-aware-routing) ([0edb7ee](https://github.com/drakarah/TensorRT-Edge-LLM/commit/0edb7ee)) |
 | MoE token tiling (`EDGELLM_MOE_TOKEN_TILE=4096` at engine build) | stages the experts once per layer as before, then runs top-k, expert GEMMs and aggregation over tiles of 4,096 tokens, so the workspace holds one tile instead of the whole 12,288-token pass | Qwen3.6 12k engine: 55 -> 64 cache slots per layer, decode 60.3 -> 63.3 tok/s (+5%), replay-20 flat (76.8 vs 77.5 s) | MoE scratch at 12k input about 810 -> 270 MiB (arithmetic from the buffer sizes, not read from a profile) | yes (Qwen3.6) | [`rtx4060/moe-token-tiling`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/rtx4060/moe-token-tiling) ([e25265a](https://github.com/drakarah/TensorRT-Edge-LLM/commit/e25265a)) |
 | Lazy per-tensor dtype fix and compaction of the ONNX external data at export | the exporter converted all tensors of a 35B model in one pass | not a speed change: lets the 35B export run in 26 GB of RAM + 42 GB of swap | export peak memory | yes (Qwen3.6) | [`rtx4060/export-lazy-dtype-fixup`](https://github.com/drakarah/TensorRT-Edge-LLM/tree/rtx4060/export-lazy-dtype-fixup) ([487b30b](https://github.com/drakarah/TensorRT-Edge-LLM/commit/487b30b), [312e391](https://github.com/drakarah/TensorRT-Edge-LLM/commit/312e391)) |
@@ -161,13 +260,94 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | Timing cache and averaged timing iterations for the engine builder | `EDGELLM_TIMING_CACHE` makes tactic choices reproducible | averaging iterations did not help; a timing cache reproduced a build exactly. Build-to-build decode variance of about 7% was traced to tuning at the maximum tree: build with the maximum equal to the served tree (12) | none | yes (via build settings) | [1c44945](https://github.com/drakarah/TensorRT-Edge-LLM/commit/1c44945) |
 | NVTX ranges for request setup; kernel unit tests (INT8 KV, XQA INT8 tree verify, dense head-512 prefill accuracy) | profiling and tests | none | none | n/a | [6c7120c](https://github.com/drakarah/TensorRT-Edge-LLM/commit/6c7120c), [84bf152](https://github.com/drakarah/TensorRT-Edge-LLM/commit/84bf152), [d09afb2](https://github.com/drakarah/TensorRT-Edge-LLM/commit/d09afb2), [8b35109](https://github.com/drakarah/TensorRT-Edge-LLM/commit/8b35109) |
 
-### Notable negative results (all measured on the Jetson AGX Orin unless stated)
+</details>
+
+<details>
+<summary><b>What did not work (negative and neutral results, all models)</b></summary>
+
+**Qwen3.6-35B-A3B (RTX 4060)**
+
+* **Qwen3.6's own MTP head (speculative decoding) loses badly with streamed experts.** Decode 45.8 -> 17.5 tok/s (-62%), replay-20 110.7 -> 213.2 s, cold prefill of a 3k prompt 1,358 -> 1,080 tok/s. A verify pass touches the experts of 4 tokens and every miss crosses PCIe, and the draft layer takes cache slots (47 instead of 60 per layer). The one useful by-product was that prefix reuse works with it (warm time to first token 129 ms against 2,160 ms), which is why plain hybrid models got their own checkpoint path.
+* **Hybrid chunked prefill is a loss on this MoE.** A 1,024-token-input engine got 37 cache slots per layer instead of 14 and decode 28.4-28.7 against 22.0-23.5 tok/s, but replay-60 went 682.4 -> 815.2 s (+19.5%); a 4,096-token-input engine with chunking (75 slots) made replay-20 110.7 -> 122.3 s (+10.5%) for +0.4% decode. Each chunk touches nearly every expert, so a chunked pass streams the non-resident experts again once per chunk (inferred, not profiled). Chunking does pay for the dense hybrid (see Qwen3.5-4B).
+* **CPU compute for expert-cache misses is parked.** The host round trip alone (router ids to the host plus an empty stream-blocking host node, no CPU math) costs +3.9 ms per token for 40 layers (about 98 us per layer): decode 45.9 -> 38.9 tok/s. At 80.5% hit rate the CPU path could save at most about 4.8 ms of a ~19 ms token (AVX2 kernel: 6.82 ms for the ~100 missed experts of a token at 6 threads, against 12.5 ms over PCIe at the 13 GB/s that was assumed then; measured copy bandwidth was later 8.1-8.6 GB/s), so the net is about +0.9 ms (~4%) unless the round trip is hidden behind GPU work, which was not built.
+* **Serve-time flags that do nothing for this model on this card.** On the dense-INT4 engine (reference: decode 45.8 tok/s, replay-20 110.7 s): `EDGELLM_INT4_GEMV_MAX_M` 2 / 8 gives 45.8 / 45.9 tok/s and 113.6 / 110.8 s; the W4A8 prompt GEMM (`EDGELLM_INT4_W4A8_MIN_M=64`) 45.8 tok/s, 113.6 s (it costs ~12 MiB of VRAM); `EDGELLM_MOE_SMALL_THRESHOLD=16` 45.6 tok/s, 109.3 s; PDL 45.7 tok/s, 110.0 s. Sequential instead of chunked GDN prefill: prefill 1,331 against 1,358 tok/s, replay-20 112.5 s, so the chunked kernel is worth about 2% here. All inside the ~2 s replay-20 noise.
+* **INT8 / FP8 activations through the whole MoE are quality-neutral, but the W4A8 Marlin kernel was not built.** Fake-quantised in the full-precision stream on 32 x 1,024 held-out tokens (exact NLL 1.47822): INT8 expert input -0.00005, INT8 input plus INT8 SwiGLU intermediate -0.00098, per-128-channel intermediate +0.00028, FP8 E4M3 input -0.00081, FP8 input plus intermediate +0.00022 (all within the ~0.001 noise). Not built because tensor math is off the critical path here (prefill is bound by the 1.9 s expert copy, decode by weight reads) and the gain would be about 350 MB of MoE scratch at 12k tokens (inferred).
+* **GPTAQ (residual-corrected GPTQ) for the dense linears is worse than plain GPTQ.** Hidden-state deviation after layer 11 (held-out): GPTQ 0.1171, GPTAQ 0.1968 (damping 0.01) and 0.1991 (damping 0.10); per-layer GPTAQ/GPTQ ratio 1.14 at layer 6, 1.44 at layer 9, 1.68 at layer 11. A tenfold damping does not help. Probable cause: the paper's gains come after a rotation that removes outlier channels, which this unrotated residual stream does not have (inferred).
+* **Gate-weighted (affinity) Hessians for the expert GPTQ give no held-out gain.** On layers 0-7 with 32 of 256 calibration sequences held out, held-out error is within 0.003 of plain GPTQ in every layer and slightly worse in 4 of 8; the lower error on the calibration data is fitting to it. Plain GPTQ's held-out error is 10-35% above its calibration error, so calibration size or variety is the open lever (inferred).
+* **Cache-aware routing beyond beta 1 breaks the model.** Perplexity on 32 x 1,024 held-out tokens (exact 4.385): beta 2 gives 5.425 (+23.7%) at 0.6% cache misses, beta 4 gives 30.6 (x7) at 0.1%.
+* **A DMA copy engine does not beat the zero-copy fill kernel for decode misses.** Pinned `cudaMemcpyAsync` reaches 8.1-8.6 GB/s at any size; the in-kernel fill reaches 11.5 GB/s for one expert per launch (11.3 / 9.9 / 8.8 / 8.0 / 7.7 for 2 / 4 / 8 / 32 / 256 experts). DMA is only 12% faster for whole-layer copies (8.57 against 7.66 GB/s), so it helps prefill, not decode; the decode fill at 9.4 GB/s is already ~82% of what the kernel can reach, at most ~1.8 ms per token to gain.
+* **llama.cpp tuning moves nothing beyond noise.** On top of the `--n-cpu-moe` sweep: pinning 6 threads to the performance cores, 12 pinned threads and 8 unpinned threads give first/second decode of 27.6/20.1, 24.4/17.4 and 19.0/16.3 tok/s at `--n-cpu-moe 40` (24.8/22.5, 35.1/22.8, 35.4/20.9 at 30); a repeated run of the first variant gave 20.4/16.8. The first decode after a load is fast, later ones are 17-23 tok/s whatever the setting; 28 and 24 layers on the CPU do not start for lack of VRAM.
+
+**Gemma 4 26B-A4B (RTX 4060 and Orin)**
+
+* **MTP loses when the experts are streamed (RTX 4060).** With the INT4 dense part and no cache, tree 8 decodes 7.5 tok/s (prose) / 8.1 (probe) against 14.0 for plain decode, and replay-15 takes 242.3 s against 187.5 s; with a 36-slot expert cache and a 3-token verify tree it is still 20.4 / 24.1-25.1 against 37.9-38.9 / 46.5 tok/s, and replay-15 126.3 s against about 113 s (estimated from the 60-call replay). A verify step of k tokens selects up to 8k distinct experts per layer (24 for 3 tokens) and evicts the cache, while only ~1.5 tokens are accepted per round. The speculative base engine also did not fit with the FP16 dense part (6.98 GB of weights against 5.53 GB, `cudaMalloc` out of memory).
+* **Letting the Marlin kernel read experts over PCIe directly was the wrong design (RTX 4060).** Decode 9.3 tok/s and prefill about 360 tok/s; staging only the routed experts through VRAM gave 11.27 tok/s and 1,228-1,600 tok/s (ceiling for decode over PCIe: 18 tok/s).
+* **INT8 Q.K^T gave nothing on the 26B (RTX 4060).** Prose decode 37.6-39.0 against 37.7-39.0 tok/s without it, long-context decode 48.5 / 49.3 / 47.5 against 48.7-49.4 / 48.8-49.3 / 47.3-47.6 tok/s at 2k / 4k / 7.5k, needles 5/6 against 6/6 (one 2/3 in one run). The macro belongs to the speculative-verify kernel and the plain one-token decode probably never takes that path (inferred): "no effect observed", not proven.
+* **More expert-cache slots can make decode slower (RTX 4060).** Prose decode 43.0-44.5 tok/s at 44 slots, 41.2-42.4 at 46 and 39.2-40.2 at 48: the cache is allocated per layer at the first decode step and a layer whose `cudaMalloc` fails silently falls back to staging (28 of 30 layers had a cache at 48 slots). 44 is the maximum on this card.
+* **A static hot-expert set is workload specific (RTX 4060).** The 36 most-used of 128 experts per layer cover 65.1% of the decode reads on the replay; the set chosen on the replay covers only 52.5% of the reads on HumanEval code (77.0% for its own set), 25 points lower. A per-layer LRU cache was used instead.
+* **A pool for the host prefix cache's pinned buffers did not help (RTX 4060).** Replay-60 325.2 s against 326.0 s without it, inside the ~1% noise and below the 2.5% ceiling estimated from 163-187 `cudaMallocHost` calls of ~35-40 ms; not merged.
+* **Dense INT4 costs exact retrieval (Orin and RTX 4060).** With the GPTQ dense part, eight 2k-token prompts with three planted facts each find 22 of 24 facts (6 of 8 prompts complete) against 24/24 for FP16 dense on the Orin; on the 4060 the same test gives 20/24 (FP16 KV) and 22/24 (INT8 KV). At 3k tokens it is 24/24 again and HumanEval does not see it (155-157 against 158), while the speed is real (Orin: generation +33%, replay-60 -13%). Keeping attention in FP16 and quantising only the MLP gate/up and the lm_head removes the loss (158/164, 8/8 at 2k and 3k) and keeps generation +11%, replay-60 -4.9%.
+* **The W4A8 prompt GEMM made the dense-INT4 retrieval worse (Orin).** On top of dense INT4: 20 of 24 facts (4 of 8 prompts) at 2k and 23/24 at 3k, against 22/24 and 24/24 without it, for replay-60 -14.7% instead of -13.3%. Not adopted.
+* **GPTQ and RTN are indistinguishable for the 26B dense INT4 (RTX 4060).** HumanEval 156 against 155 of 164 (FP16 dense 158), identical speed; GPTQ stays because it costs nothing at serve time (5.5 min of calibration).
+* **Marlin MoE block sizes and a register cap (Orin).** Reference decode 29.3-30.9 tok/s, prefill 1,639-1,644 tok/s. A 16-row block for prefill: 1,410 tok/s (-14%); 48 rows: decode 24.6, prefill 1,584; 64 rows: decode 17.0, prefill 1,200 (-27%). Compiling the kernels with `__launch_bounds__(128, 3)` (168 registers, 550 B of spills) gave 15.1 / 14.4 tok/s decode and 739 / 726 tok/s prefill; with the 8-row block it was neutral (32.4-33.5 against 33.8-34.9). A forced 256-thread config is invalid for N = 1,408 (HTTP 500). Why the 48- and 64-row kernels lose was not measured.
+* **INT8 KV is not a long-context decode win on the Orin.** Replay-60 improved 234.0 -> 218.2 s (-6.8%), but single long-context probes fell from 38.9 / 44.1 / 41.6 to 37.6 / 36.2 / 34.5 tok/s at 2k / 4k / 7.5k (-17 to -22% at 4k and above), while the 4060 gained +10 / +15 / +21% there. Probably because the KV is already read from fast unified memory and the dequantisation adds work (inferred, not profiled).
+* **llama.cpp expert offload knobs on the 26B (RTX 4060, baseline).** Decode 38.3 tok/s and prefill 420 tok/s at `--n-cpu-moe 21`; 12 / 14 / 20 threads 38.7 / 39.5 / 41.1 tok/s; `--no-op-offload` (host experts computed on the CPU) 34.7 tok/s and 130 tok/s prefill (40.2 s for a 5.2k prompt against 12.45 s); `-ub 4096` or 8192 does not start. Prefill wants big micro-batches (a large ubatch with N 30: 1,312 tok/s) and decode wants experts on the GPU, so no single setting wins: every combination came to 8.3-8.9 s per application call.
+
+**Gemma 4 12B**
+
+* **Split-KV count is not a lever for the 12B decode attention (Orin and RTX 4060).** Orin: forcing 4 splits on the sliding layers moved a launch 150 -> 156 us, 3 / 6 splits on the target's global layers 445 -> 441 / 482 us, cold decode stayed inside +-1 tok/s (31.5 against 32 / 30.8 / 30.8 for 32 / 48 / 64 CTAs). RTX 4060 at 24k tokens: global-layer launch 621 us at 3 splits, 646 / 691 / 846 us at 6 / 12 / 24 (round 35.97 -> 38.03 ms). Launch time does not scale with positions per block; the head-512 decode attention is tensor-bound at about 20 TFLOPS, 67% of the 30.2 TFLOPS FP32-accumulate peak (inferred from the arithmetic, the profiler capture failed).
+* **The Orin's verify-tree and tile tuning mostly vanish on the RTX 4060.** Tree 16 instead of 20: replay-60 139.3 / 139.4 s against 141.3 / 142.5 s (-1.5%) against -16.6% per token on the Orin (hypothesis: the 4060 decode GEMM is already near its read roof). W4A8 with 4 pipeline stages: prefill 2,353 against 2,353 tok/s, because the kernel is tensor-bound at 79% of the INT8 peak (95.5 of 120.8 TOPS). Split-K 3 / 5 variants: decode round -0.7%.
+* **The GELU plugin buys little on the RTX 4060.** The generated kernel was already near-efficient on sm_89: 324.7 -> 268.6 us per call (-18%, against -65% on the Orin), prompt passes -4.4%, wall time per output token -0.8% to -1.2%.
+* **The RMSNorm plugin is neutral (Orin).** A plugin for one norm plus the optional residual add: decode round 59.44 -> 59.57 ms (+0.2%), prompt passes 36.4 -> 36.1 s, total kernel time +0.9%. The norm family costs 1.82 s of 75 s; the plugin saves about 0.8 s of that, because TensorRT already fused norm, residual add and the next norm into one launch (190 us) while the plugin runs one launch per norm. Not merged.
+* **The decode INT4 GEMM has no headroom left in tuning, on either card.** RTX 4060: 190 configurations (tile 16 / 32 rows, split-K 1-6, stages 2-6) on the four 12B decode shapes: the five best of gate+up and of down lie within 0.2% and the engine's picks are the optimum; the whole decode GEMM runs at 92% of the measured 259.6 GB/s read floor (about 2 ms of the 34.4 ms round at most). Orin: stages 5 / 6 give -3.5% on the down shape and 0-0.5% on the other three (about 0.6% of a round), so no 5- or 6-stage variants were baked.
+* **A register cap on the decode INT4 GEMM (Orin).** `min_blocks_per_mp` 5 / 6 (96 / 80 registers, 5-6 CTAs per SM): best gain 1-2%, inside the 2.7% drift between sessions, many capped variants much slower (down shape 235 -> 250-270 us), and one (split-K 5, 4 stages, cap 6) produces wrong output on K = 15,360 (max abs diff 10.94, 5.9% relative) while its time looks normal. Not used.
+* **W4A8 tiles and stages beyond 64x128x64 / 4 stages (Orin).** Gate/up 8.23 ms at 4 stages; 5 and 6 stages never beat 4 and stage 2 is ~1.75x slower; 128x128 or 64x256 tiles with 128 threads take 255-370 ms (40 registers, 109 M local loads and stores); a 256-thread 128x128 tile 9.12 ms (+11%); 32x128 11.33 ms; a 2x2x1 warp layout with 24% fewer shared-memory wavefronts is 4.2% slower because it executes 4.2% more instructions. Kernel time followed instructions per MMA, not wavefronts or bank conflicts.
+* **A shiftless INT4 dequantisation is not worth building (Orin).** An upper-bound probe in the real decode GEMM (dequantisation instructions removed, bias assumed free, results wrong on purpose) gave no speed-up: 168.9 -> 185.1 us on the E4B gate/up shape and 379.4 -> 388.3 us on the 12B's; the kernel is DRAM-bound at 88% of the roof, and after paying for the bias the net instruction saving is only about 5%.
+* **No 2-bit decode beats INT4 on the Orin.** A bench kernel (M = 16, correctness-checked against the same decode rules, random weights): INT4 streams 328 G weights/s (93% of the DRAM roof); a QTIP-style table-free trellis 164, a shared-memory vector-quantisation table 213 (bank conflicts: 5.8 wavefronts per load), the cheapest imaginable pair trellis 329 (a tie at half the bytes). Even a free decode would reach only 569-600 G weights/s, 1.7x. Trellis formats are also lossy, so nothing was built.
+* **Lossless entropy coding of the INT4 weights can save at most 12% (RTX 4060 measurement, Orin sample agrees).** All 96 INT4 FFN tensors of the 12B: nibble entropy 3.517 bit per weight, so at most 513 MB of 4,246.7 MB (12.1%); per-tensor Huffman 11.6%; modelling the neighbouring nibble gains nothing; the scales could save at most ~70 MB. Variable-length decoding needs a table lookup per symbol, which does not fit the 2-instruction decode of the INT4 kernel (inferred from the 2-bit bench above); not built.
+* **An s4 tensor-core decode GEMM is parked (Orin).** The hardware has `IMMA.16864.S4` at 106.2 TOPS (4x FP16), but after the tree-16 fix the decode GEMM runs at 85% of the 186 GB/s roofline (39.2 ms of a 60.7 ms round for 6.2 GB), so any GEMM idea can win at most 5.9 ms (10% of the round).
+* **A static 40-node verify tree is no better than 20 nodes (RTX 4060).** Prose 58.7 against 63.4 tok/s (-7%) because every round verifies 40 positions, and on fresh code-edit runs 163.6 / 161.5 / 161.7 against 166.1 / 166.6 tok/s. Only the variable size (20 nodes unless a long suffix chain is proposed) helped: 172.7 tok/s.
+* **Deeper or wider MTP trees lose on the 12B too (RTX 4060).** On the tree-24 engine: 6x3/20 63.0 tok/s, 6x4/20 55.2, 4x4/20 55.1, 8x2/20 57.4, 8x2/24 57.9, 8x3/24 56.2; each draft step reads the whole drafter, so extra depth and width cost more than the acceptance they add (±2 tok/s run-to-run, single prompt).
+* **MTP chain mode produced garbled answers on the 12B (RTX 4060).** Chains 1x3/4 and 1x2/3 dropped spans of tokens mid-answer ("...bandwidth,2. Analyze the3. Check for high4. Monitor the..."), while tree mode reproduces the INT8-KV model. The chain verify path was not investigated and is not used.
+* **A 128k-token context does not fit in 8 GB (RTX 4060).** A 131,072-position engine fails at load with `cudaMalloc` out of memory: the global-layer KV alone is 1,024 MiB (+768 MiB over 32k), so about 8.4 GB would be needed against 8.19 GB, with the 32k engine already at 7,647 MiB. Roughly 64-80k positions fit on paper. Every lever that would make room costs something: INT4 global KV (-512 MiB, quality risk), INT3 (see above), a reduced vocabulary (-450 MiB, rejected on the E4B), no drafter (-360 MiB, decode 63 -> 37 tok/s).
+* **A pooled pinned-memory allocator for the prefix-cache snapshots changed nothing (RTX 4060).** Replay-60 wall per output token -1.4% (170.3 / 170.4 s against 172.0 / 169.8 s with a 1 GiB cache), inside the noise; with a 16 GiB budget nothing is evicted, so the pool is never used. The 9% GPU idle came from the per-chunk snapshots themselves, which the capture interval (fewer snapshots) addressed instead.
+
+**Gemma 4 E4B**
+
+* **Round-to-nearest requantisation to group 128 cost application tests.** Of 53 tests that regressed against llama.cpp, Google's QAT group-32 checkpoint as shipped passed 26, an RTN requantisation to group 128 with a bf16 head 13, and RTN group 128 with an INT4 head 5; GPTQ group 128 with a bf16 head passed 27, and a GPTQ-calibrated INT4 head cost no answers (71 tests: 51 against 49 with the bf16 head). Both conversion steps cost quality, which is why every checkpoint here is calibrated.
+* **The Orin's tuning is flat or worse on the RTX 4060 (E4B, replay-60 68.3 s base).** `EDGELLM_INT4_GEMV_MAX_M` 0 / 1 / 8: 68.4 / 68.0 / 68.4 s; all 12-node tree shapes 67.8-69.5 s; a maximum tree of 16: 67.7-68.8 s; of 24: 70.2-71.9 s (3-5% slower); pure chains 1x5/6 76.8 s and 1x4/5 79.2 s; suffix draft length 3: 70.2 s, 6 / 10 / 16: 68.3 / 68.0 / 68.9 s. A larger prefix-cache pool is worth under 1% (60% of prompt tokens are already reused, an unlimited cache would reuse about 66%). Forcing the host's real CUDA driver instead of the container's compatibility layer: 68.4 s either way.
+* **A pure chain tree loses on prose (Orin).** 1x4/5 matched the 2x3/8 tree on the recorded JSON-schema calls (297.1 against 294.2 s) but lost 9% on prose (52.5 / 50.7 against 56.8 / 56.1 tok/s).
+* **Bisecting the W4A8 answer-length lean by operation class found nothing.** Enabling W4A8 for one class at a time (replay-60, paired by call): gate+up +2.6% tokens (11 longer / 8 shorter), qkv +4.5% (15 / 11), q only +0.6% (7 / 7), o plus the per-layer projection +1.4% (14 / 11); only all together was significant (22 longer / 9 shorter, then 21 / 6, then 16 / 12 in a third pair, so the 60-call metric is noisy; 59 / 27 pooled). The lean is workload dependent (HumanEval mean lengths 414 against 409 tokens for all-ops W4A8).
+* **The RMSNorm plugin is neutral on the E4B too (Orin).** Decode step 24.6 against 24.7 ms, prompt passes 12.4 against 13.0 s, replay-60 107.2 / 106.4 against 108.2 / 110.1 s; TensorRT already fuses norm, add and norm.
+* **A graph of the whole draft chain gave nothing outside the profiler (Orin).** The six draft steps leave about 0.7 ms of GPU idle per round (~2%); capturing them as one graph showed no measurable gain in the replay.
+* **Deep split-K variants (8 and 16) for the INT4 decode GEMM (Orin).** Replay-60 117.55 against 116.25 s (+1.1%) and cold decode 80.9 against 83.1 tok/s: the tiny-N launches improve in isolation but they are launch-latency bound.
+* **Nothing to win in the E4B drafter (Orin).** The sparse candidate head is 81 us per round (0.3% of the round) and the drafter's layer GEMVs 0.84 ms per round (3.2%), mostly at the launch floor, so INT4 could save under 0.2 ms (<1%); the INT4 head and INT4 MLP drafter are 12B items.
+* **K smoothing for INT8 Q.K^T attention changed almost nothing.** Subtracting the K mean (SageAttention-style) moved the relative error 0.40 -> 0.37%, and a single static per-head K scale gave 0.42-0.60%, so smoothing was dropped (Gemma's Q/K norms keep the channels tame) and K is read straight from the INT8 cache. INT8 or FP8 P.V was rejected: sm_87 has no FP8 MMA and the O side is not the bottleneck.
+* **The newest toolchain changed nothing measurable.** TensorRT 11.3 and then everything newest (CUTLASS DSL 4.8.0, cupy 14.2, onnx 1.23): replay-60 135.5 -> 134.8 -> 134.5 s, prompt 1,848 / 1,808 / 1,856 tok/s, 71-test suite 52 / 50 / 50 (spread 45-52). Newer `transformers` (5.15+) breaks the Gemma 4 export (the config no longer exposes the global head size, and the assistant silently gets head size 256 instead of 512).
+* **Pure-spin barrier waits in the XQA decode kernel are not worth a flag (Orin).** Replacing the `nanosleep` back-off gains 5.7% on the sliding-window and 6-8% on the global attention kernels, about 0.3 ms of a 29 ms round; left off.
+* **Overlapping decode with prefill is not pursued (RTX 4060).** In the 396 recorded calls none starts while another is running (318 of 395 gaps between a response and the next request are under 50 ms); the engine is batch 1, in-flight batching refuses speculative decoding at startup, and a second execution context would not fit (7,577 of 8,188 MiB used).
+
+**Qwen3.5-4B**
+
+* **The first chunked GDN prefill kernel was slower than the sequential one.** 2,048 tokens: 10.7 against 9.1 ms per layer call; 8,192 tokens 42.9 against 37.0 ms (a column-serial triangular solve and 57% long-scoreboard stalls). The blocked inverse, cp.async and 2 CTAs per SM version reached 3.6 and 14.6 ms. Computing the Gram matrices per k head instead of per v head was no better (3.72 against 3.63 ms).
+* **Chunked GDN prefill is worth much less on the RTX 4060 than on the Orin.** Prefill 3,388 -> 3,483 tok/s (+2.8%) and replay-60 119.0 -> 117.1 s (-1.6%), against +13.5% prefill on the Orin; the INT4 prefill GEMMs dominate there (inferred, not profiled).
+* **Tree drafting stays off.** Orin: replay-60 284.3 s for a 2x5/12 tree against 292.8 s for the chain, probe 48.8 against 49.7 tok/s. RTX 4060 with the same full-vocabulary head: 116.0 s (2x5/12) and 118.6 s (2x3/6) against 118.1 s for the chain. The tree export cannot use the reduced draft vocabulary, which is worth 13% (102.5 against 118.1 s).
+* **A hybrid model cannot take a prompt longer than its engine input length.** The prompt length is the engine's maximum input (no chunked pass for the GDN layers): with a 32,768-token KV capacity, input limits of 16,384, 24,576 and 32,768 do not load on 8 GB (`cudaMalloc` out of memory), 12,288 does; on the Orin an input limit of 4,096 refused 16 of the 60 replay requests. The E4B reaches 30,000 tokens with a 2,048-token input limit thanks to chunked prefill.
+
+**All models / tooling**
+
+* **A standalone variant sweep mispredicted the in-engine best (Orin).** Forced into the engine, the standalone-best variants were slower than the autotuner's picks: qkv 118.0 against 112.2 us (the standalone benchmark had said 106 against 119, an 11% error) and gate/up 393.3 against 384.3 us (a 5% error with the sign reversed). TensorRT's own timing agreed with the engine. A sweep is a candidate generator; the decision needs a trace of the engine in the same session.
+* **Buffer placement does not explain run-to-run kernel speed (Orin).** A pure read of the 16.2 MB (qkv) and 60.8 MB (gate/up) weights from 11 start offsets (16 B to 4 KiB alignment, positions up to 333 MiB) varied by under 0.5% (97.1-97.8 and 346.3-349.6 us).
+* **Stock Edge-LLM's default speculative setting is slower than no speculation (Orin, E4B).** Default MTP (chain of 6, verify size 7) 19.2 tok/s, 3 steps / verify 4 24.0, 2 / 3 25.9, no speculation 29.0, and the tree flags used here (top-k 2, 5 steps, tree 12) 32.3 tok/s; the benchmark's stock arm uses the last.
+
+### Earlier items (Jetson AGX Orin unless stated)
+
 
 | negative result |
 |---|
 | Reduced output vocabulary (98k of 262k rows) for the E4B base model: 71-test suite 49 -> 41 passed and no speed gain, because the drafter proposed out-of-vocabulary tokens in 336 of 423 requests (rejected). |
 | W4A8 as first shipped (all ops, one-tile flush): GEMM 0.96-1.00x of the FP16 kernel, replay-60 123.1 -> 127.2 s (+3.3% slower), 36 of 60 answers changed. |
-| W4A8 with all ops (even after the kernel fixes): HumanEval 88.4% -> 85.4%; fixed by the per-op filter (90.2%), but a +3% answer-length lean on structured requests remains. |
+| W4A8 with all ops (even after the kernel fixes): HumanEval 88.4% -> 85.4%; fixed by the per-op filter (90.2%), but an answer-length lean of about +3% on structured requests remains (significant in two of three paired replay runs; it could not be located or removed). |
 | Dithered (unbiased) INT8 activation rounding to remove that length lean: lean unchanged (+2.1% tokens with the filter, +3.7% all ops). |
 | W4A8 flush with a magic-number INT32 -> FP32 conversion: kernel +4.8% slower (4,356 -> 4,566 us) and 10% more instructions. |
 | W4A8 hoisting the B-tile copy addresses: 2.2% fewer instructions but kernel +2.2% slower (3,744 -> 3,828 us). |
@@ -180,23 +360,33 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | Coalesced state access in the GDN verify and replay commit: bit-identical, standalone commit 9% faster, no change in the engine (71.8 tok/s and 188.9 s both). |
 | Using the tree-replay kernel for the linear GDN commit: eats the verify saving, replay 0.7% slower. |
 | Group-flush decode GEMM at engine level: -5% summed weight-GEMM time but the 16- and 32-wide launches got 5-9% slower and replay-60 moved only -0.4%. |
-| Prompt lookup on the E4B: replay-60 123.1 -> 122.9 s; with a 11-token chain code edits -14%. |
+| Prompt lookup on the E4B: replay-60 123.1 -> 122.9 s (Orin); with an 11-token chain code edits -14% (RTX 4060, 287.7 -> 246.4 tok/s). |
 | Wider or deeper trees: a 16-node verify tree costs about 2% by itself; 2x6/16 loses 0.8% over all 396 requests; Qwen draft chain length 3-6 is flat (at best -1.9%). |
 | GEMM instead of GEMV for single-token decode (threshold 0): decode 45% slower (23.8 vs 43.5 tok/s). |
 | Averaging builder timing iterations: no effect on decode or prompt speed; newer CuTe DSL 4.8.0 against 4.7.0: no gain. |
 | INT3 MLP weights on the 12B (RTX 4060, fake-quant test): HumanEval 92.1% -> 75.0%. |
 
+</details>
+
+<details>
+<summary><b>What is in this repo</b></summary>
+
 ## What is in this repo
 
 | path | |
 |---|---|
-| `Dockerfile` | builds both stacks from pinned commits for `PROFILE` / `GPU_ARCH` |
-| `docker-compose.yml` | builder, bench, serve |
-| `poc/run.sh`, `poc/lib.sh` | the pipeline (download, quantise, export, build, benchmark, serve) |
-| `poc/config/` | engine and server settings per model and profile |
-| `poc/bench.py` | the timing harness and report |
-| `poc/tools/` | the quantisation tools (GPTQ for Gemma, INT8 embeddings, reduced draft vocabulary) |
+| `Dockerfile` | builds the optimised stack (and, with `WITH_STOCK=1`, stock Edge-LLM) from pinned commits for `PROFILE` / `GPU_ARCH` |
+| `docker-compose.yml` | `serve` (default), `bench`, `compare` |
+| `poc/run.sh`, `poc/lib.sh` | the pipeline: prepare (download export or quantise, build engine), serve, benchmark |
+| `poc/config/` | engine and server settings per model and profile, each value with its reason |
+| `poc/bench.py` | the timing harness and report; works against any OpenAI-compatible server |
+| `poc/tools/` | the quantisation tools (layer-wise GPTQ for Gemma and Qwen3.6, INT8 embeddings, reduced draft vocabulary, INT8 KV calibration) |
 | `poc/data/` | recorded workload, INT8 KV-cache scales, draft vocabulary maps |
+
+</details>
+
+<details>
+<summary><b>Results per machine and model (Jetson AGX Orin and RTX 4060, stock vs optimised)</b></summary>
 
 ## Results
 
@@ -529,3 +719,5 @@ HumanEval pass@1 (greedy, public benchmark), per round: optimised 153/164 / 155/
 |  | warm time to first token, s | 1.76 |
 |  | decode tokens/s at this context | 53.7 |
 |  | needles correct of 3 | 3 |
+
+</details>

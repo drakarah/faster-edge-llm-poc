@@ -13,16 +13,49 @@ need_memory_gb() {
   sudo fallocate -l $(( $1 - have + 4 ))G /swapfile.poc && sudo chmod 600 /swapfile.poc && sudo mkswap /swapfile.poc && sudo swapon /swapfile.poc"
 }
 
-hf_download() {  # hf_download REPO DIR  (resumable; Gemma needs HF_TOKEN and an accepted licence)
+hf_download() {  # hf_download REPO DIR  (resumable; retries rate limits and server errors with backoff; Gemma needs HF_TOKEN and an accepted licence)
   local repo=$1 dir=$2
   [ -f "$dir/.complete" ] && return 0
-  python - "$repo" "$dir" <<'PY'
-import os, sys
+  python - "$repo" "$dir" <<'PY' || return 1
+import os, sys, time
 from huggingface_hub import snapshot_download
 repo, d = sys.argv[1:3]
-snapshot_download(repo_id=repo, local_dir=d, token=os.environ.get("HF_TOKEN") or None,
-                  ignore_patterns=["*.gguf", "*.msgpack", "*.h5", "original/*"])
+tries, waited = int(os.environ.get("HF_RETRIES", "12")), 0
+for attempt in range(1, tries + 1):
+    try:
+        # two parallel connections: the free tier answers many parallel requests with HTTP 429; partial files resume
+        snapshot_download(repo_id=repo, local_dir=d, token=os.environ.get("HF_TOKEN") or None, max_workers=2,
+                          ignore_patterns=["*.gguf", "*.msgpack", "*.h5", "original/*"])
+        break
+    except Exception as e:   # rate limit (429), server error, dropped connection
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status in (401, 403, 404):
+            sys.exit(f"{repo}: HTTP {status} (wrong name, private repository, or licence not accepted / token missing)")
+        retry_after = getattr(getattr(e, "response", None), "headers", {}).get("Retry-After")
+        wait = min(900, int(retry_after) if retry_after and retry_after.isdigit() else 30 * 2 ** min(attempt - 1, 5))
+        print(f"download of {repo} interrupted ({type(e).__name__}{f' HTTP {status}' if status else ''}); attempt {attempt}/{tries}, resuming in {wait} s", flush=True)
+        if attempt == tries:
+            sys.exit(f"download of {repo} failed after {tries} attempts")
+        time.sleep(wait)
 PY
+  touch "$dir/.complete"
+}
+
+# Plain-HTTPS mirror of an export: $1 = base URL with a manifest.txt (lines: sha256  size  relative/path), $2 = target directory. curl resumes, every file is verified.
+mirror_download() {
+  local url=${1%/} dir=$2 sum size path
+  [ -f "$dir/.complete" ] && return 0
+  mkdir -p "$dir"
+  curl -fsSL --retry 5 "$url/manifest.txt" -o "$dir/.manifest" || return 1
+  while read -r sum size path; do
+    [ -n "$path" ] || continue
+    mkdir -p "$dir/$(dirname "$path")"
+    if [ -f "$dir/$path" ] && [ "$(stat -c %s "$dir/$path")" = "$size" ] && [ -f "$dir/$path.ok" ]; then continue; fi
+    echo "mirror: $path"
+    curl -fL --retry 10 --retry-delay 20 -C - "$url/$path" -o "$dir/$path" || return 1
+    [ "$(sha256sum "$dir/$path" | cut -d' ' -f1)" = "$sum" ] || { echo "checksum mismatch: $path"; rm -f "$dir/$path"; return 1; }
+    touch "$dir/$path.ok"
+  done < "$dir/.manifest"
   touch "$dir/.complete"
 }
 
@@ -146,19 +179,77 @@ build_fast() {
     DRAFT="--mtp-draft-dir $CKPT_DIR/assistant-int4mlp"
   fi
   env $EXPORT_ENV python -m tensorrt_edgellm.scripts.export $CKPT $FAST/onnx $EXPORT_ARGS $DRAFT 2>&1 | tee $LOG_DIR/$MODEL-$PROFILE-export.log | tail -n 5
+  build_engines $FAST/onnx
+  rm -rf $FAST/onnx
+  build_stamp $FAST_REF > $FAST/.done
+}
+
+# Engine(s) from an exported model ($1 = directory with llm/ and, for speculative models, mtp_draft/). The engine only loads on the GPU and TensorRT version that built it.
+build_engines() {
+  local ONNX_ROOT=$1
   step "optimised stack: engines"
+  use_stack fast
   export EDGELLM_XQA_MULTI_BLOCK=auto                       # split-KV decode attention, sized from the GPU's SM count
   local COMMON="--maxInputLen $MAXIN --maxKVCacheCapacity $CAP --maxBatchSize 1 --maxKVPoolPages $POOL"
   local OUT=$FAST/engine; [ "$INT8_EMBEDDINGS" = 1 ] && OUT=$FAST/engine_fp
   if [ "${NO_SPEC:-0}" = 1 ]; then   # plain autoregressive engine (no drafter, no verify tree)
-    env ${BUILD_ENV:-} $LLM_BUILD --onnxDir $FAST/onnx/llm --engineDir $OUT $COMMON > $LOG_DIR/$MODEL-$PROFILE-build-base.log 2>&1
+    env ${BUILD_ENV:-} $LLM_BUILD --onnxDir $ONNX_ROOT/llm --engineDir $OUT $COMMON > $LOG_DIR/$MODEL-$PROFILE-build-base.log 2>&1
   else
-    env ${BUILD_ENV:-} $LLM_BUILD --onnxDir $FAST/onnx/llm --engineDir $OUT $COMMON --maxVerifyTreeSize $TREE --specBase > $LOG_DIR/$MODEL-$PROFILE-build-base.log 2>&1
-    env ${BUILD_ENV:-} $LLM_BUILD --onnxDir $FAST/onnx/mtp_draft --engineDir $OUT $COMMON --maxDraftTreeSize $TREE --specDraft > $LOG_DIR/$MODEL-$PROFILE-build-draft.log 2>&1
+    env ${BUILD_ENV:-} $LLM_BUILD --onnxDir $ONNX_ROOT/llm --engineDir $OUT $COMMON --maxVerifyTreeSize $TREE --specBase > $LOG_DIR/$MODEL-$PROFILE-build-base.log 2>&1
+    env ${BUILD_ENV:-} $LLM_BUILD --onnxDir $ONNX_ROOT/mtp_draft --engineDir $OUT $COMMON --maxDraftTreeSize $TREE --specDraft > $LOG_DIR/$MODEL-$PROFILE-build-draft.log 2>&1
   fi
-  [ "$INT8_EMBEDDINGS" = 1 ] && { python $POC/tools/quantize_ple.py $FAST/engine_fp $FAST/engine --token-embedding; rm -rf $FAST/engine_fp; }
-  rm -rf $FAST/onnx
+  if [ "$INT8_EMBEDDINGS" = 1 ]; then python $POC/tools/quantize_ple.py $FAST/engine_fp $FAST/engine --token-embedding; rm -rf $FAST/engine_fp; fi
+}
+
+# The simple path: engine from a published export (HF_ONNX_REPO) or a local one (ONNX_DIR), no quantisation or export on this machine.
+build_from_export() {
+  local SRC=${ONNX_DIR:-$DATA/onnx/$MODEL}
+  if [ -z "${ONNX_DIR:-}" ]; then
+    step "download the exported model"
+    if [ -n "${HF_ONNX_REPO:-}" ] && hf_download $HF_ONNX_REPO $SRC; then :
+    elif [ -n "${ONNX_MIRROR_URL:-}" ] && { echo "Hugging Face download failed or is not configured: trying the mirror $ONNX_MIRROR_URL"; mirror_download $ONNX_MIRROR_URL $SRC; }; then :
+    else
+      die "could not download the exported model. Options:
+  - wait and run again: partial downloads resume (the free Hugging Face tier rate-limits; HF_TOKEN=<free token> raises the limit)
+  - ONNX_MIRROR_URL=<https url of a mirror with a manifest.txt> (see poc/tools/make_mirror_manifest.py)
+  - download the files by any means into a directory and set ONNX_DIR=<that directory> (it contains llm/)
+  - QUANTIZE=1: quantise on this machine from the original weights (also downloads from Hugging Face, 67 GB, and takes hours)"
+    fi
+  fi
+  [ -d $SRC/llm ] || die "$SRC/llm not found: not an Edge-LLM export"
+  rm -rf $FAST; mkdir -p $FAST
+  build_engines $SRC
+  # the engine keeps its large weight files as links to the export (a second 17 GB copy would not fit next to it on most disks)
+  local f; for f in external_int4_moe_weights.safetensors embedding.safetensors; do
+    if [ -e $SRC/llm/$f ]; then rm -f $FAST/engine/$f; ln -s $SRC/llm/$f $FAST/engine/$f; fi
+  done
   build_stamp $FAST_REF > $FAST/.done
+}
+
+prepare() {
+  step "model $MODEL, profile $PROFILE"
+  if [ "$(cat $FAST/.done 2>/dev/null)" = "$(build_stamp $FAST_REF)" ]; then echo "engine already built: $FAST/engine"; return; fi
+  if [ "${QUANTIZE:-0}" = 1 ]; then
+    step "QUANTIZE=1: quantising and exporting on this machine"
+    NO_STOCK=1 builder
+  elif [ -n "${HF_ONNX_REPO:-}" ] || [ -n "${ONNX_DIR:-}" ] || [ -n "${ONNX_MIRROR_URL:-}" ]; then
+    build_from_export
+  else
+    echo "no prebuilt export is published for $MODEL: quantising and exporting on this machine (what QUANTIZE=1 does)"
+    NO_STOCK=1 builder
+  fi
+  step "ready"
+}
+
+# Time a server that is already running (the compose `serve` service) with the PoC workload; no second copy of the model is loaded, which matters on an 8 GB card.
+bench_api() {
+  local url=${BENCH_URL:-http://serve:$PORT} label=${BENCH_LABEL:-fast}
+  step "benchmark of $url (label $label)"
+  until curl -sf $url/health >/dev/null 2>&1; do echo "waiting for $url ..."; sleep 5; done
+  python $POC/bench.py run --url $url --label $label --calls $BENCH_CALLS --humaneval $BENCH_HUMANEVAL --longctx "$BENCH_LONGCTX" \
+    --out $RESULT_DIR/$MODEL-$PROFILE-$label-round1.json
+  step "results"
+  python $POC/bench.py report --results $RESULT_DIR --model $MODEL --profile $PROFILE
 }
 
 # Wait until the server on $1 answers /health, or its process $2 dies, or $3 seconds pass.
