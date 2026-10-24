@@ -7,8 +7,8 @@ A 35-billion-parameter model on an 8 GB laptop GPU is normally a patience exerci
 | Qwen3.6-35B-A3B on an RTX 4060 laptop (8 GB, 31 GB RAM) | time for the 60 requests | decode | prompt processing |
 |---|---:|---:|---:|
 | llama.cpp (Q4_K_M, experts on the CPU, `--n-cpu-moe` tuned) | 1,367 s | 17-23 tok/s | 350-460 tok/s |
-| **this project, exact routing** (lossless apart from the INT4 weights) | **363 s** (3.8x) | 49 tok/s | ~1,500 tok/s |
-| **this project, default** (cache-aware routing, +0.09% perplexity) | **270 s** (5.1x) | 62-63 tok/s | ~1,500 tok/s |
+| **this project, exact routing** (lossless apart from the INT4 weights) | **355 s** (3.9x) | 49-51 tok/s | ~1,500 tok/s |
+| **this project, default** (cache-aware routing, +0.09% perplexity) | **255 s** (5.4x) | 61-65 tok/s | ~1,500 tok/s |
 
 ![Replay time, Qwen3.6-35B-A3B on an RTX 4060 laptop](docs/replay-qwen36.svg)
 
