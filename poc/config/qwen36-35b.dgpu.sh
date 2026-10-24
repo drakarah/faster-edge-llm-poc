@@ -37,4 +37,4 @@ SERVE_ARGS="--tool-call-parser generic"   # no speculation flags; prefix reuse s
 SERVE_ENV="EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe EDGELLM_EMBEDDING_ON_HOST=1 EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MOE_CACHE_SLOTS=auto EDGELLM_MOE_CACHE_RESERVE_MB=250 EDGELLM_MOE_PREFILL_OVERLAP=1 EDGELLM_MOE_CACHE_BIAS=${CACHE_BIAS:-0.5}"
 DRAFTER_INT4_MLP=0
 # Prebuilt export published for this model: `docker compose up` downloads it and only builds the engine (no 26 GB-RAM export, no hours of GPTQ). QUANTIZE=1 redoes the quantisation locally from the original weights.
-HF_ONNX_REPO=${HF_ONNX_REPO:-}      # set to the published repository once it exists
+HF_ONNX_REPO=${HF_ONNX_REPO:-drakarah/Qwen3.6-35B-A3B-EdgeLLM-INT4}   # INT8-KV export (INT4 weights); downloaded instead of quantising
