@@ -1,4 +1,4 @@
-# faster-llm-poc
+# faster-edge-llm-poc
 
 **Run big language models fast on a small NVIDIA GPU, behind an OpenAI-compatible API you can plug into any chat UI.**
 
