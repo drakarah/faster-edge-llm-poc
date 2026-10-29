@@ -32,12 +32,12 @@ BUILD_ENV="EDGELLM_MOE_STAGE_EXPERTS=2"
 SERVE_ARGS="--tool-call-parser gemma4"   # the model's tool-call format (the PoC replay and the app use tool calls); no draft flags: no speculation
 # Serve environment, one reason each:
 #  EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe  experts live in pinned host memory (the point of this profile)       EDGELLM_EMBEDDING_ON_HOST=1  the 1.5 GB embedding table too
-#  EDGELLM_FORCE_GREEDY=1 / EDGELLM_JSON_MAX_WHITESPACE=20   as in every profile (README)
+#  EDGELLM_JSON_MAX_WHITESPACE=20   as in every profile (README). EDGELLM_FORCE_GREEDY is not set: this profile has no speculation, so a request keeps its own temperature (forced greedy decoding can make a thinking model loop in long reasoning)
 #  EDGELLM_MOE_CACHE_SLOTS=auto   per-layer GPU expert cache sized from the free VRAM at the first decode step (45 slots of 128 here: 83.75% hit rate); decode 14 tok/s with no cache -> 54
 #  EDGELLM_MOE_CACHE_RESERVE_MB=250   VRAM kept free after sizing the cache (the late +124 MiB growth of the process is unexplained)
 #  EDGELLM_MOE_PREFILL_CHUNK=32   prefill prefetches the experts in chunks of 32 into a 3 x 64 MiB ring instead of two whole-layer buffers: +6 cache slots, replay-60 346.9 -> 326.0 s
 #  EDGELLM_MOE_CACHE_BIAS=0   exact routing: the fork's cache-aware routing defaults to 0.5 and was only measured on Qwen3.6
 #  EDGELLM_SWA_PREFIX_CACHE_MB=4096   host-resident prefix cache of the bounded sliding-window KV (replay-60 -7.5%; warm TTFT halves for prompts longer than one 4,096-token pass); not --enable-context-reuse (it
 #                                     switches the sliding-window KV back to full storage)
-SERVE_ENV="EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe EDGELLM_EMBEDDING_ON_HOST=1 EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MOE_CACHE_SLOTS=auto EDGELLM_MOE_CACHE_RESERVE_MB=250 EDGELLM_MOE_PREFILL_CHUNK=32 EDGELLM_SWA_PREFIX_CACHE_MB=4096 EDGELLM_MOE_CACHE_BIAS=0"
+SERVE_ENV="EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe EDGELLM_EMBEDDING_ON_HOST=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MOE_CACHE_SLOTS=auto EDGELLM_MOE_CACHE_RESERVE_MB=250 EDGELLM_MOE_PREFILL_CHUNK=32 EDGELLM_SWA_PREFIX_CACHE_MB=4096 EDGELLM_MOE_CACHE_BIAS=0"
 DRAFTER_INT4_MLP=0      # no drafter on this profile

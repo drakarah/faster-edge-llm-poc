@@ -29,7 +29,7 @@ BUILD_ENV="EDGELLM_MOE_STAGE_EXPERTS=2 EDGELLM_MOE_TOKEN_TILE=4096"
 SERVE_ARGS="--tool-call-parser generic"   # no speculation flags; prefix reuse stays off (each checkpoint split costs an extra expert-streaming pass: replay-20 77.5 -> 100 s)
 # Serve environment, one reason each:
 #  EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe  experts live in pinned host memory (the point of this profile)       EDGELLM_EMBEDDING_ON_HOST=1  the embedding table too
-#  EDGELLM_FORCE_GREEDY=1 / EDGELLM_JSON_MAX_WHITESPACE=20   as in every profile (README)
+#  EDGELLM_JSON_MAX_WHITESPACE=20   as in every profile (README). EDGELLM_FORCE_GREEDY is not set: this profile has no speculation, so a request keeps its own temperature (forced greedy decoding can make a thinking model loop in long reasoning)
 #  EDGELLM_MOE_CACHE_SLOTS=auto   per-layer GPU expert cache sized from the free VRAM at the first decode step; EDGELLM_MOE_CACHE_RESERVE_MB=250  VRAM kept free after sizing
 #  EDGELLM_MOE_PREFILL_OVERLAP=1  the experts of layer L+1 are copied while layer L computes (prefill floor 1.9 s per pass; overlap reaches 92% of it)
 #  EDGELLM_MOE_CACHE_BIAS=0.5     LOSSY (decode only): the router adds 0.5 to the logits of experts already in the GPU cache before the top-8 choice: 65% fewer cache misses for +0.09% perplexity,
@@ -45,7 +45,7 @@ SERVE_ARGS="--tool-call-parser generic"   # no speculation flags; prefix reuse s
 #                                 +4% to +7% decode over the fp32 CPU path at its best admit. =0 keeps fp32 (also lossy against the GPU's fp16 arithmetic, but about 3e-7 relative error per expert).
 #  EDGELLM_MOE_CPU_ADMIT=16       misses before an expert is admitted to the GPU cache: 8 is best for fp32, 16 for int8 (higher: the CPU becomes the bottleneck). EDGELLM_MOE_CPU_CORES=auto pins one worker per performance core on
 #                                 Intel hybrid CPUs (unpinned elsewhere; the benefit of pinning has not been re-measured since the final fix).
-SERVE_ENV="EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe EDGELLM_EMBEDDING_ON_HOST=1 EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MOE_CACHE_SLOTS=auto EDGELLM_MOE_CACHE_RESERVE_MB=250 EDGELLM_MOE_PREFILL_OVERLAP=1 EDGELLM_MOE_CACHE_BIAS=${CACHE_BIAS:-0.5} EDGELLM_MOE_TAIL_SKIP=${TAIL_SKIP:-0} EDGELLM_MOE_CPU_MISS=${CPU_MISS:-1} EDGELLM_MOE_CPU_ADMIT=${CPU_ADMIT:-16} EDGELLM_MOE_CPU_INT8=${CPU_INT8:-1} EDGELLM_MOE_CPU_THREADS=${CPU_THREADS:-6} EDGELLM_MOE_CPU_CORES=${CPU_CORES:-auto}"
+SERVE_ENV="EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe EDGELLM_EMBEDDING_ON_HOST=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MOE_CACHE_SLOTS=auto EDGELLM_MOE_CACHE_RESERVE_MB=250 EDGELLM_MOE_PREFILL_OVERLAP=1 EDGELLM_MOE_CACHE_BIAS=${CACHE_BIAS:-0.5} EDGELLM_MOE_TAIL_SKIP=${TAIL_SKIP:-0} EDGELLM_MOE_CPU_MISS=${CPU_MISS:-1} EDGELLM_MOE_CPU_ADMIT=${CPU_ADMIT:-16} EDGELLM_MOE_CPU_INT8=${CPU_INT8:-1} EDGELLM_MOE_CPU_THREADS=${CPU_THREADS:-6} EDGELLM_MOE_CPU_CORES=${CPU_CORES:-auto}"
 DRAFTER_INT4_MLP=0
 # Prebuilt export published for this model: `docker compose up` downloads it and only builds the engine (no 26 GB-RAM export, no hours of GPTQ). QUANTIZE=1 redoes the quantisation locally from the original weights.
 HF_ONNX_REPO=${HF_ONNX_REPO:-drakarah/Qwen3.6-35B-A3B-EdgeLLM-INT4}   # INT8-KV export (INT4 weights); downloaded instead of quantising
