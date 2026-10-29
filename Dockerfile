@@ -18,9 +18,9 @@ ARG STOCK_REPO=https://github.com/NVIDIA/TensorRT-Edge-LLM.git
 ARG STOCK_REF=0f52705723abfa8c6702654bfdcc082a728ed353
 ARG FAST_REPO=https://github.com/drakarah/TensorRT-Edge-LLM.git
 ARG FAST_REF=ff5e1febe674aeaa18204b6d774dc046a320f72f
-# The discrete-GPU profile pins a newer commit: the 26B dgpu engine streams its experts from host memory (expert cache, prefill chunk ring, cache-aware routing, token tiling, Qwen3.6 export, prefix reuse, hybrid chunked prefill, tail skip, CPU miss path, cache fill floor fix, routed-expert chunked prefill, cache-fill from decode cache: fork dev 6d27335; the 26B config sets EDGELLM_MOE_CACHE_BIAS=0).
+# The discrete-GPU profile pins a newer commit: the 26B dgpu engine streams its experts from host memory (expert cache, prefill chunk ring, cache-aware routing, token tiling, Qwen3.6 export, prefix reuse, hybrid chunked prefill, tail skip, CPU miss path, cache fill floor fix, routed-expert chunked prefill (opt-in), cache-fill from decode cache: fork dev 786a71b; the 26B config sets EDGELLM_MOE_CACHE_BIAS=0).
 # The Orin pin stays where its measurements were taken.
-ARG FAST_REF_DGPU=6d27335e1ddf63a6b1652fb7c19cafe2ea249bd8
+ARG FAST_REF_DGPU=786a71bb876cfd685354a4c6d53fa86a8d466701
 
 # Python dependencies of the exporter, the server and the quantisation tools (torch and numpy come from the base image).
 COPY poc/build/pins.txt /tmp/pins.txt
