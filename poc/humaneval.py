@@ -28,7 +28,9 @@ def load_tasks(cache):
 
 def ask(url, prompt, max_tokens):
     body = {"model": "local", "messages": [{"role": "user", "content": PROMPT.format(prompt=prompt)}],
-            "max_tokens": max_tokens, "temperature": 0}
+            "max_tokens": max_tokens}
+    if os.environ.get("BENCH_SERVER_DEFAULTS") != "1":
+        body["temperature"] = 0
     body.update(json.loads(os.environ.get("BENCH_EXTRA_BODY") or "{}"))   # e.g. enable_thinking false for servers that think by default
     req = urllib.request.Request(url + "/v1/chat/completions", json.dumps(body).encode(),
                                  {"Content-Type": "application/json"})
@@ -62,7 +64,7 @@ def passes(code, task, timeout=20):
             return False
 
 
-def run_humaneval(url, cache, limit=164, max_tokens=1024):
+def run_humaneval(url, cache, limit=164, max_tokens=int(os.environ.get("BENCH_HUMANEVAL_MAX_TOKENS") or 1024)):
     tasks = load_tasks(cache)[:limit]
     outputs, t0 = [], time.perf_counter()
     for task in tasks:

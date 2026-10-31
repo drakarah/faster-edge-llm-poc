@@ -57,6 +57,9 @@ DRAFTER_INT4_MLP=0
 #  KV_INITIAL_TOKENS=12288             optional: maps the KV cache on demand (starts at this many tokens, grows to input + max_tokens per request, trims to the peak of the last 4 requests within 300 s) and gives the freed VRAM to the expert cache.
 #                                      Clients must send max_tokens (without it the first request maps the whole pool). Tuning: EDGELLM_KV_SHRINK_WINDOW_REQUESTS / _SECONDS / EDGELLM_KV_SHRINK_SLACK_TOKENS.
 CHAT_ENV="EDGELLM_DEFAULT_ENABLE_THINKING=${THINKING:-1} EDGELLM_DEFAULT_TEMPERATURE=${TEMPERATURE:-1.0} EDGELLM_DEFAULT_TOP_P=${TOP_P:-0.95} EDGELLM_DEFAULT_TOP_K=${TOP_K:-20} EDGELLM_DEFAULT_PRESENCE_PENALTY=${PRESENCE_PENALTY:-1.5} EDGELLM_PRESERVE_THINKING=${PRESERVE_THINKING:-1}${KV_INITIAL_TOKENS:+ EDGELLM_KV_INITIAL_TOKENS=$KV_INITIAL_TOKENS} EDGELLM_REQUEST_STATS=${REQUEST_STATS:-1}"
-export BENCH_EXTRA_BODY=${BENCH_EXTRA_BODY-'{"chat_template_kwargs": {"enable_thinking": false}}'}   # the server thinks by default; the bench needs answer tokens (its warm-up asks for 8) and timed answers, not reasoning
+# The bench times the server as it runs normally: server sampling defaults and thinking on (no temperature or thinking override). Only the output caps are raised and a reasoning budget
+# is sent so a runaway reasoning block (3 of 24 agent runs hit 16,384 tokens) cannot dominate a 164-task run; the model card advises against budgets below about 16,000.
+export BENCH_SERVER_DEFAULTS=1 BENCH_NEEDLE_MAX_TOKENS=12288 BENCH_HUMANEVAL_MAX_TOKENS=12288
+export BENCH_EXTRA_BODY=${BENCH_EXTRA_BODY-'{"reasoning_budget_tokens": 8192}'}
 # Prebuilt export published for this model: `docker compose up` downloads it and only builds the engine (no 26 GB-RAM export, no hours of GPTQ). QUANTIZE=1 redoes the quantisation locally from the original weights.
 HF_ONNX_REPO=${HF_ONNX_REPO:-drakarah/Qwen3.6-35B-A3B-EdgeLLM-INT4}   # INT8-KV export (INT4 weights); downloaded instead of quantising

@@ -31,12 +31,20 @@ def post(url, body, stream=False, timeout=3600):
     return urllib.request.urlopen(req, timeout=timeout)
 
 
-def stream_chat(url, messages, max_tokens):
-    """Returns (ttft_s, decode_s, completion_tokens, prompt_tokens)."""
-    body = {"model": "local", "messages": messages, "max_tokens": max_tokens, "temperature": 0, "stream": True,
+# BENCH_SERVER_DEFAULTS=1 times the server as it runs normally: no temperature override (the server's sampling defaults apply, and
+# thinking stays on where that is the default), reasoning tokens count as generated tokens, and the output caps are raised.
+SERVER_DEFAULTS = os.environ.get("BENCH_SERVER_DEFAULTS") == "1"
+NEEDLE_MAX_TOKENS = int(os.environ.get("BENCH_NEEDLE_MAX_TOKENS") or 12)
+
+
+def stream_answer(url, messages, max_tokens):
+    """Returns (ttft_s, decode_s, completion_tokens, prompt_tokens, answer_text); the first token is the first reasoning or answer token."""
+    body = {"model": "local", "messages": messages, "max_tokens": max_tokens, "stream": True,
             "stream_options": {"include_usage": True}}
+    if not SERVER_DEFAULTS:
+        body["temperature"] = 0
     body.update(json.loads(os.environ.get("BENCH_EXTRA_BODY") or "{}"))   # e.g. {"chat_template_kwargs": {"enable_thinking": false}} for servers that think by default
-    t0 = time.perf_counter(); first = last = None; pt = ct = 0
+    t0 = time.perf_counter(); first = last = None; pt = ct = 0; text = ""
     with post(url, body) as f:
         for raw in f:
             line = raw.decode().strip()
@@ -45,12 +53,20 @@ def stream_chat(url, messages, max_tokens):
             d = json.loads(line[5:])
             if d.get("usage"):
                 pt, ct = d["usage"].get("prompt_tokens", 0), d["usage"].get("completion_tokens", 0)
-            if d.get("choices") and (d["choices"][0].get("delta") or {}).get("content"):
+            delta = (d.get("choices") or [{}])[0].get("delta") or {}
+            if delta.get("content"):
+                text += delta["content"]
+            if delta.get("content") or (SERVER_DEFAULTS and (delta.get("reasoning_content") or delta.get("reasoning"))):
                 now = time.perf_counter()
                 first = first or now; last = now
     if first is None:
         raise RuntimeError("no tokens streamed")
-    return first - t0, last - first, ct, pt
+    return first - t0, last - first, ct, pt, text
+
+
+def stream_chat(url, messages, max_tokens):
+    """Returns (ttft_s, decode_s, completion_tokens, prompt_tokens)."""
+    return stream_answer(url, messages, max_tokens)[:4]
 
 
 def prefill(url, runs=3):
@@ -92,7 +108,9 @@ def replay(url, workload, calls):
     recs = [r for i, r in enumerate(recs) if i not in skip]
     times, answers, ctoks, ptoks, errors = [], [], 0, 0, []
     for i, r in enumerate(recs):
-        body = dict(r["request"]); body["model"] = "local"; body["stream"] = False; body["temperature"] = 0
+        body = dict(r["request"]); body["model"] = "local"; body["stream"] = False
+        if not SERVER_DEFAULTS:
+            body["temperature"] = 0
         body.update(json.loads(os.environ.get("BENCH_EXTRA_BODY") or "{}"))
         t0 = time.perf_counter()
         try:
@@ -142,14 +160,19 @@ def longctx(url, lengths):
                 k = max(1, int(n * depth))
                 msgs = [{"role": "user", "content": long_prompt(n, uuid.uuid4(), f"What is the valve in bay {k} set to? Answer with the number only.")}]
                 first_msgs = first_msgs or msgs
-                body = {"model": "local", "messages": msgs, "max_tokens": 12, "temperature": 0}
-                body.update(json.loads(os.environ.get("BENCH_EXTRA_BODY") or "{}"))
-                t0 = time.perf_counter()
-                with post(url, body) as f:
-                    resp = json.loads(f.read())
-                colds.append(time.perf_counter() - t0)
-                tokens = (resp.get("usage") or {}).get("prompt_tokens", 0)
-                ok += str(record_value(k)) in re.findall(r"\d+", content(resp))[:1]
+                if SERVER_DEFAULTS:
+                    ttft, _, _, tokens, answer = stream_answer(url, msgs, NEEDLE_MAX_TOKENS)
+                    colds.append(ttft)
+                else:
+                    body = {"model": "local", "messages": msgs, "max_tokens": 12, "temperature": 0}
+                    body.update(json.loads(os.environ.get("BENCH_EXTRA_BODY") or "{}"))
+                    t0 = time.perf_counter()
+                    with post(url, body) as f:
+                        resp = json.loads(f.read())
+                    colds.append(time.perf_counter() - t0)
+                    tokens = (resp.get("usage") or {}).get("prompt_tokens", 0)
+                    answer = content(resp)
+                ok += str(record_value(k)) in re.findall(r"\d+", answer)[:1]
             entry.update({"prompt_tokens": tokens, "cold_s": statistics.median(colds), "cold_tok_s": tokens / statistics.median(colds), "needles_ok": ok,
                           "warm_ttft_s": stream_chat(url, first_msgs, 1)[0]})
             essay = [{"role": "user", "content": long_prompt(n, uuid.uuid4(), "Now write an essay of at least 300 words on how a pressure valve works. Use continuous prose, no lists.")}]
