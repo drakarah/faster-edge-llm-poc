@@ -49,7 +49,7 @@ SERVE_ENV="EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe EDGELLM_EMBEDDING_ON_HOST=1 ED
 DRAFTER_INT4_MLP=0
 # Chat defaults for a served endpoint (docker compose up), not for the benchmarks (they send temperature 0 and their own fields). Qwen's model-card "thinking, general tasks" settings, applied to requests that omit the field:
 #  EDGELLM_DEFAULT_ENABLE_THINKING=1   the model's own default; a request can still send chat_template_kwargs {"enable_thinking": false}. Thinking is not free: HumanEval 21-30/33 against 31/33 without, and it can run away
-#                                      (13 of 56 agent runs hit a 16,384-token cap in a repeat loop, METRICS R25dv, R25dw), so set max_tokens.
+#                                      (13 of 56 agent runs hit a 16,384-token cap in a repeat loop), so set max_tokens.
 #  EDGELLM_DEFAULT_TEMPERATURE=1.0, TOP_P=0.95, TOP_K=20, PRESENCE_PENALTY=1.5   (presence penalty needs this profile's plain engine: the runtime refuses it with speculation)
 #                                      The agent study's best arm (14/16 completed against 12/24) changed temperature and penalty together; their separate effect is not measured.
 #  EDGELLM_PRESERVE_THINKING=1         keeps the reasoning of earlier turns in the rendered history (agent loops); costs prompt tokens and prefix-reuse hits.
