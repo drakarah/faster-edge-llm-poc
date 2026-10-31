@@ -4,7 +4,26 @@
 
 This is a proof of concept for a set of optimisations in a fork of NVIDIA's TensorRT Edge-LLM, measured on several model families and two kinds of hardware: Qwen3.6-35B-A3B and a derivative of it (CyberTiel), Gemma 4 (26B-A4B, 12B and E4B) and Qwen3.5-4B, on an RTX 4060 laptop GPU (8 GB) and a Jetson AGX Orin (32 GB). The smaller models are compared side by side with stock Edge-LLM. The large mixture-of-experts models have no stock arm (stock cannot load them in 8 GB; they fit at all because of the streaming described below), so they are compared with llama.cpp where a baseline was run. Per-model numbers, caveats and everything that did not work are in the [Models and GPUs](#models-and-gpus) table and the results further down.
 
-The most extreme case is a 35-billion-parameter model on an 8 GB laptop GPU, normally a patience exercise: most of the weights live in system RAM and the CPU does a lot of the work. For the mixture-of-experts models this project keeps the weights in RAM but streams only what each step needs to the GPU, and a set of tricks makes that streaming cheap. As a headline example, Qwen3.6-35B-A3B on the same laptop and the same 60-request workload:
+## The same 60-request workload on every model
+
+Replay of 60 recorded requests, seconds (lower is better), median of two rounds. "Stock" is NVIDIA's unmodified Edge-LLM with the same settings; where it cannot load the model, the baseline is llama.cpp or there is none.
+
+| model | Jetson AGX Orin 32 GB: stock, then this project | RTX 4060 8 GB: stock, then this project |
+|---|---|---|
+| Gemma 4 E4B | 511.0 s, then **103.7 s** (4.93x) | stock did not run (out of memory), then **56.6 s** |
+| Gemma 4 12B | 557.2 s, then **256.2 s** (2.18x) | stock did not run (out of memory), then **141.5 s** |
+| Qwen3.5-4B | 325.6 s, then **160.8 s** (2.02x) | stock did not run (out of memory), then **86.1 s** |
+| Gemma 4 26B-A4B (mixture of experts) | no stock arm, **246.0 s** | no stock arm, **323.8 s** |
+| Qwen3.6-35B-A3B (mixture of experts) | not run | llama.cpp 1,367 s, then **212-215 s** (6.4x), see below |
+| CyberTiel (a Qwen3.6-based 35B-A3B) | not run | no 60-request replay; see [long context and agents](#long-context-and-agents-qwen36-and-cybertiel-on-the-rtx-4060) |
+
+The 26B's two engines differ per machine (the 4060 streams the experts from host memory and has no draft model), so its two figures are not a hardware comparison. Decode speed, prompt processing, long-context behaviour, quality checks and what did not work are per model in [Models and GPUs](#models-and-gpus) and in the results further down; a tokens-per-second figure means nothing without the prompt length it was measured at, so those tables name it.
+
+The workload is a recording of a real app that turns user requests into SQL and chart specifications (60 independent requests, prompts of 300 to 7,500 tokens, median about 2,700, JSON output). The requests share no growing conversation, so it says nothing about agentic coding, where each turn extends the previous prompt; that needs prefix reuse and long context and is measured separately. A tokens-per-second figure means nothing without the prompt length it was measured at, so both columns name it; decode speed at longer contexts is in the long-context table further down. How the numbers were measured, what is not apples to apples, and everything that did not work are further down.
+
+### The hard case: a 35B model on an 8 GB laptop GPU
+
+A 35-billion-parameter mixture-of-experts model does not fit an 8 GB card, so most of its weights live in system RAM and the CPU normally does much of the work. Here the same workload on Qwen3.6-35B-A3B and an RTX 4060 laptop (8 GB, 31 GB RAM):
 
 | Qwen3.6-35B-A3B on an RTX 4060 laptop (8 GB, 31 GB RAM) | time for the 60 requests | decode, 300 tokens after a ~10-token prompt | prompt processing, one 3,000-token prompt |
 |---|---:|---:|---:|
@@ -12,11 +31,9 @@ The most extreme case is a 35-billion-parameter model on an 8 GB laptop GPU, nor
 | **this project, exact routing** (lossless apart from the INT4 weights) | **235 s** (5.8x) | 64 tok/s | ~1,700 tok/s |
 | **this project, default** (cache-aware routing, +0.09% perplexity) | **212-215 s** (6.4x) | 68-74 tok/s | ~1,700 tok/s |
 
-The numbers above were measured with the Linux kernel's default DMA mapping. On a boot with **`iommu=pt`** (see Requirements) the same default setting needs **187 s** for the 60 requests (one run), the cold prefill of a 1.4k-token prompt goes from 726 to 1,232 tok/s and the warm time to first token from 1.9 to 1.1 s; decode after the cache is warm does not change (97.8 tok/s). Exact routing and llama.cpp were not run again on that boot, so the ratios in the table belong to the default boot.
+The numbers in this table were measured with the Linux kernel's default DMA mapping. On a boot with **`iommu=pt`** (see Requirements) the same default setting needs **187 s** for the 60 requests (one run), the cold prefill of a 1.4k-token prompt goes from 726 to 1,232 tok/s and the warm time to first token from 1.9 to 1.1 s; decode after the cache is warm does not change (97.8 tok/s). Exact routing and llama.cpp were not run again on that boot, so the ratios in the table belong to the default boot.
 
 ![Replay time, Qwen3.6-35B-A3B on an RTX 4060 laptop](docs/replay-qwen36.svg)
-
-The workload is a recording of a real app that turns user requests into SQL and chart specifications (60 independent requests, prompts of 300 to 7,500 tokens, median about 2,700, JSON output). The requests share no growing conversation, so it says nothing about agentic coding, where each turn extends the previous prompt; that needs prefix reuse and long context and is measured separately. A tokens-per-second figure means nothing without the prompt length it was measured at, so both columns name it; decode speed at longer contexts is in the long-context table further down. How the numbers were measured, what is not apples to apples, and everything that did not work are further down.
 
 ## Quick start
 
