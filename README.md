@@ -1,4 +1,4 @@
-# faster-edge-llm-poc
+# faster-llm-poc
 
 **Run big language models fast on a small NVIDIA GPU, behind an OpenAI-compatible API you can plug into any chat UI.**
 
@@ -65,18 +65,34 @@ BENCH_URL=http://host.docker.internal:8080 BENCH_LABEL=stock docker compose run 
 | model | tested on | what you get |
 |---|---|---|
 | **Qwen3.6-35B-A3B** (default; hybrid mixture of experts) | RTX 4060 laptop 8 GB | the numbers above |
+| **CyberTiel** (Huihui-Ornith-1.5-35B-A3B-abliterated, a Qwen3.6-architecture 35B-A3B with its refusals removed; INT4 export, `MODEL=cybertiel-35b`) | RTX 4060 8 GB (mini PC), 31 GB RAM | a 262,144-token window with a growable KV pool, context reuse and the terse Sharp chat template, see [long context and agents](#long-context-and-agents-qwen36-and-cybertiel-on-the-rtx-4060). Cold prefill about 1,300 tok/s on 1,600-token prompts; decode 68-78 tok/s at 5k-65k tokens of context (model card, one run per cell). **No refusals: run agents on it in a sandbox** |
 | Gemma 4 26B-A4B (mixture of experts) | RTX 4060 laptop 8 GB, Jetson AGX Orin 32 GB | measured, see the results below |
 | Gemma 4 12B and E4B, Qwen3.5-4B | RTX 4060 laptop 8 GB, Jetson AGX Orin 32 GB | measured, side by side with stock NVIDIA Edge-LLM |
 
-Pick another model with `MODEL=` in `.env` (see `.env.example`). Gemma needs a Hugging Face token of an account that accepted its licence.
+Pick another model with `MODEL=` in `.env` (see `.env.example`). Gemma needs a Hugging Face token of an account that accepted its licence. All measurements were taken on one RTX 4060 box (i9-12900H, 31 GB RAM, PCIe 4.0 x8) and one Jetson AGX Orin; other cards are untested, and the 4060 numbers depend on the card's 8 GB (they are labelled 4060-specific where it matters).
 
-## Why it is fast, in five lines
+## Long context and agents (Qwen3.6 and CyberTiel on the RTX 4060)
+
+The 60-request replay above has no growing conversation. An agent resends a longer prompt every turn, so what matters is context reuse and the cost of a long window. These numbers were measured on the 4060 box with engines built the way the profiles build them (`config/qwen36-35b.dgpu.sh`, `config/cybertiel-35b.dgpu.sh`), **not** re-run from a clean data directory through `docker compose`. Sources: METRICS R25eu-R25ex and the live-session log, in the notes repository.
+
+| measurement (RTX 4060 only) | result |
+|---|---|
+| decode, short prompts, static 128k KV pool / static 256k pool / growable 256k pool | 81.4 tok/s with 42 expert slots / 59.1 tok/s with 16 / **84.1 tok/s with 56** |
+| decode at 128k tokens of context, warm: static 128k pool against growable 256k | 81.4 against 83.5 tok/s (+2.5%, not significant) |
+| 14-turn agent conversation up to 68k tokens, 256k engine: no reuse / reuse with a static pool / reuse with the growable pool | 23.29 / 3.21 / 3.60 s per turn (turns 8-14); first-token log-probabilities agree on 14 of 14 turns (largest difference 0.023) |
+| live pi coding-agent session, CyberTiel, reuse on: 116 requests, up to 88,597 prompt tokens | 97.6% of the prompt tokens served from reuse (3.95 M of 4.04 M), median 300 new tokens prefilled per request, no errors |
+| against PolyStrata (Qwen3.6 on both; PolyStrata ran the Unsloth UD-Q4_K_M GGUF, ours is our own INT4 export; 12k engines, thinking off, R25bt) | cold prefill 1,112 against 555 tok/s at 2k tokens and 2,416 against 1,049 at 6k; decode 72-74 against 35-55 tok/s (PolyStrata default and exact arms). The replay totals are not comparable: PolyStrata refused 11-12 of the 60 requests (structured output with tools) |
+
+What is not shown. A needle test at 222k tokens passed on the static pool and failed on both growable runs; the log-probabilities of the first token are identical in top-1 across the two pools (12 of 12), so it is unresolved whether the failure is the pool or the model's own uncertainty at that length. Reuse was exercised to 88k tokens only in one live session, and interleaved long and short requests (which evict cached prefixes above the mapped pages) were not tested. A client that does not send `max_tokens` makes the first request map the whole pool; send it. Greedy output is not reproducible on this stack, so text identity cannot be tested.
+
+## Why it is fast, in six lines
 
 1. **Experts stay in RAM, the GPU keeps a cache of the ones in use.** Each layer has a small cache of experts on the GPU; a step copies only what is missing.
 2. **Prompts overlap compute and copy.** While layer N computes, the experts of layer N+1 are already on their way, and the ones that are already in the decode cache are copied inside the GPU instead of over PCIe.
 3. **The router prefers experts that are already cached** (optional, `CACHE_BIAS`): about 65% fewer cache misses for about +0.1 to +0.3% perplexity (two measurements: +0.09% and +0.27%; the test noise is about 0.15%). Perplexity understates the change: against the exact model the top-1 token differs at about 5% of positions (KL 0.022, teacher-forced on 32 x 1,024 tokens; many are near-ties). Plain exact routing remains one setting away (`CACHE_BIAS=0`). A second option, `TAIL_SKIP`, does not fetch low-ranked experts that are missing from the cache: with exact routing otherwise it gives +18% decode for +0.04% perplexity.
 4. **Everything is INT4 with calibrated quantisation** (GPTQ), an INT8 KV cache and fused kernels, so more of the cache fits in 8 GB.
-5. **It is a fork of NVIDIA's TensorRT Edge-LLM**, so all of it runs as ordinary TensorRT plugins; no custom runtime.
+5. **The KV cache is mapped on demand** (optional, `KV_INITIAL_TOKENS`): a static 256k-token KV pool leaves the expert cache 16 slots per layer and costs 27% of the decode speed; the growable pool starts small, grows with each request and keeps 56 slots (details below).
+6. **It is a fork of NVIDIA's TensorRT Edge-LLM**, so all of it runs as ordinary TensorRT plugins; no custom runtime.
 
 The fork lives at [drakarah/TensorRT-Edge-LLM](https://github.com/drakarah/TensorRT-Edge-LLM); every change below links to the branch that holds it.
 
@@ -112,6 +128,7 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 | `PROFILE` | `dgpu` (default), `orin` | `dgpu`: discrete GPU, x86_64 or arm64; set `GPU_ARCH` (default 89 = RTX 40-series). `orin`: Jetson AGX Orin (sm_87) |
 | `MODEL` | `qwen36-35b` (default, dgpu only), `cybertiel-35b` (dgpu only: [drakarah/Huihui-Ornith-1.5-35B-A3B-abliterated-EdgeLLM-INT4](https://huggingface.co/drakarah/Huihui-Ornith-1.5-35B-A3B-abliterated-EdgeLLM-INT4), refusals removed, run it sandboxed; 262,144-token window, growable KV pool, context reuse and the terse Sharp chat template, the settings of the live 4060 server in METRICS R25ev-R25ex; engine build is not re-run end to end from this repo yet), `gemma4-e4b`, `gemma4-12b`, `qwen35-4b`, `gemma4-26b` (optimised arm only: stock Edge-LLM cannot load an engine built by the fork nor export the 51 GB checkpoint in 32 GB of RAM; `PROFILE=dgpu` uses `config/gemma4-26b.dgpu.sh` and the dgpu pin, and has not been run end to end from a clean data dir yet) | the models we measured |
 | `HF_TOKEN` | token | needed for Gemma only |
+| `KV_INITIAL_TOKENS` | unset (Qwen3.6 dgpu), 12288 (CyberTiel) | growable KV pool: tokens mapped at the start (`EDGELLM_KV_INITIAL_TOKENS`); clients must send `max_tokens` |
 | `BENCH_CALLS`, `BENCH_ROUNDS` | 60, 2 | replayed requests per round, rounds per stack |
 | `BENCH_HUMANEVAL` | 164 | HumanEval problems per run (0 skips); public benchmark, pass@1 and tokens/s |
 | `BENCH_LONGCTX` | per model (gemma4-12b: `4096,8192,11500,16384,24576,30000`; e4b and qwen: `2048,4096,8192`); empty skips | long-context test: prompt lengths in tokens, ascending. Per length: cold time to first token and prompt tokens/s (a unique nonce defeats prefix reuse), the same prompt again (warm), exact retrieval of 3 planted facts (10/50/90% depth), and decode tokens/s with that context in the KV cache. A stack that refuses or fails a length is recorded as such and not tried on longer ones (stock builds its engine for the replay's context only: no chunked prefill, no bounded sliding-window KV, so on the 12B it stops at 12,288 tokens). Both engines are built for a fixed capacity (`CAP` in `config/`): lengths above it are refused by design |
@@ -287,6 +304,9 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 
 **Qwen3.6-35B-A3B (RTX 4060)**
 
+* **A static 256k KV pool costs 27% of the decode speed.** Its 2.5 GiB of KV leaves 16 expert slots per layer instead of 42 (59.1 against 81.4 tok/s, METRICS R25eu); the growable pool is the answer (table above).
+* **Trimming the KV mapping too eagerly or too lazily both cost.** With a trim window of 32 requests one 222k-token request left decode at 65.6 tok/s afterwards (the mapping stayed large, the expert cache small); trimming immediately cost about 2.2 s each time a long and a short request alternated. The default is 4 requests / 300 s; that setting was chosen from these two ends and was not run as an arm of its own.
+* **Growing the KV cache under context reuse crashed first.** The context cache's circular page free list handed out pages above the mapped range (illegal memory access in the RoPE kernel); fixed by a lowest-first page allocator with a usable limit. A guard that disabled growth whenever reuse was on was written and dropped, because the combination has to work.
 * **Qwen3.6's own MTP head (speculative decoding) loses badly with streamed experts.** Decode 45.8 -> 17.5 tok/s (-62%), replay-20 110.7 -> 213.2 s, cold prefill of a 3k prompt 1,358 -> 1,080 tok/s; a re-test on the current build with exact routing gave 19.1 tok/s decode (replay-20 184.7 s), so the loss is structural. A verify pass touches the experts of 4 tokens (20.3 distinct experts per layer against 8 for one token in a routing trace) and cache fills fall only 5% per token at 4 tokens, so every miss still crosses PCIe, and the draft layer takes cache slots. The one useful by-product was that prefix reuse works with it (warm time to first token 129 ms against 2,160 ms), which is why plain hybrid models got their own checkpoint path. MTP with the cache-aware bias crashes (illegal memory access on the first request, under investigation), so that combination is untested.
 * **Hybrid chunked prefill with small chunks is a loss on this MoE; with the engine's own input length it is free.** A 1,024-token-input engine got 37 cache slots per layer instead of 14 and decode 28.4-28.7 against 22.0-23.5 tok/s, but replay-60 went 682.4 -> 815.2 s (+19.5%); a 4,096-token-input engine with chunking (75 slots) made replay-20 110.7 -> 122.3 s (+10.5%) for +0.4% decode. Each chunk touches nearly every expert, so a chunked pass streams the non-resident experts again once per chunk (inferred, not profiled). Chunking at the full input length (12,288) only affects prompts that would otherwise be refused, and is on by default for that reason (see the table above). It pays for the dense hybrid (see Qwen3.5-4B).
 * **The first design of CPU compute for expert-cache misses was parked; the second one is on by default (table above).** The host round trip alone (router ids to the host plus an empty stream-blocking host node, no CPU math) cost +3.9 ms per token for 40 layers (about 98 us per layer): decode 45.9 -> 38.9 tok/s, and the arithmetic at the time left a net of about +4%. What paid later was handing the misses to spinning threads through a mapped mailbox from a GPU kernel, with no host synchronisation (decode 62.5 -> 75.9 tok/s, +21%).
@@ -406,7 +426,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | `poc/config/` | engine and server settings per model and profile, each value with its reason |
 | `poc/bench.py` | the timing harness and report; works against any OpenAI-compatible server |
 | `poc/tools/` | the quantisation tools (layer-wise GPTQ for Gemma and Qwen3.6, INT8 embeddings, reduced draft vocabulary, INT8 KV calibration) |
-| `poc/data/` | recorded workload, INT8 KV-cache scales, draft vocabulary maps |
+| `poc/data/` | recorded workload, INT8 KV-cache scales, draft vocabulary maps, the Sharp chat template of the CyberTiel profile (Apache-2.0, with its notice) |
 
 </details>
 
