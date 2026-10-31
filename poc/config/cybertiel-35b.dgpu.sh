@@ -4,6 +4,7 @@
 # Only the published export is supported (the calibration mix, code + security, and its scripts are in the notes repository); QUANTIZE=1 is refused because it would use the Qwen3.6 KV scales and calibration text.
 [ "${QUANTIZE:-0}" = 1 ] && die "cybertiel-35b has no local quantisation path here: use the published export (HF_ONNX_REPO) or ONNX_DIR"
 _user_onnx_repo=${HF_ONNX_REPO:-}
+REQUEST_STATS=${REQUEST_STATS:-1}               # per-request timing at GET /stats (the live server runs it)
 KV_INITIAL_TOKENS=${KV_INITIAL_TOKENS:-12288}   # growable KV pool, see qwen36-35b.dgpu.sh (this profile maps a 262,144-token pool on demand)
 source "$(dirname "${BASH_SOURCE[0]}")/qwen36-35b.dgpu.sh"
 BASE_REPO=huihui-ai/Huihui-Ornith-1.5-35B-A3B-abliterated
