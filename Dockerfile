@@ -21,7 +21,8 @@ ARG FAST_REF=ff5e1febe674aeaa18204b6d774dc046a320f72f
 # The discrete-GPU profile pins a newer commit: the 26B dgpu engine streams its experts from host memory (expert cache, prefill chunk ring, cache-aware routing, token tiling, Qwen3.6 export, prefix reuse, hybrid chunked prefill, tail skip, CPU miss path, cache fill floor fix, routed-expert chunked prefill (opt-in), cache-fill from decode cache: fork dev 786a71b; the 26B config sets EDGELLM_MOE_CACHE_BIAS=0).
 # The Orin pin stays where its measurements were taken.
 # Pin moved from dev 786a71b to rtx4060/qwen-defaults-merge bb8d0a9 (786a71b plus presence penalty, preserved thinking, environment defaults for request fields, hybrid checkpoints in host memory): the served-endpoint defaults of the dgpu Qwen3.6 profile need them. The headline numbers below were measured on 786a71b; the added features are switched by environment variables and the speed numbers were not re-measured on the new pin.
-ARG FAST_REF_DGPU=bb8d0a97dc0ae86e4509d0f5a21c7936cb567374
+# Moved again to fork dev 10e2bf7 (bb8d0a9 plus the growable KV pool, EDGELLM_KV_INITIAL_TOKENS, which composes with context reuse; also reasoning budget and control-token defanging). Off unless the variable is set.
+ARG FAST_REF_DGPU=10e2bf7a5b8497a4ea86753ad2de8291b778a12e
 
 # Python dependencies of the exporter, the server and the quantisation tools (torch and numpy come from the base image).
 COPY poc/build/pins.txt /tmp/pins.txt
