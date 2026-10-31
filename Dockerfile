@@ -21,8 +21,8 @@ ARG FAST_REF=ff5e1febe674aeaa18204b6d774dc046a320f72f
 # The discrete-GPU profile pins a newer commit: the 26B dgpu engine streams its experts from host memory (expert cache, prefill chunk ring, cache-aware routing, token tiling, Qwen3.6 export, prefix reuse, hybrid chunked prefill, tail skip, CPU miss path, cache fill floor fix, routed-expert chunked prefill (opt-in), cache-fill from decode cache: fork dev 786a71b; the 26B config sets EDGELLM_MOE_CACHE_BIAS=0).
 # The Orin pin stays where its measurements were taken.
 # Pin moved from dev 786a71b to rtx4060/qwen-defaults-merge bb8d0a9 (786a71b plus presence penalty, preserved thinking, environment defaults for request fields, hybrid checkpoints in host memory): the served-endpoint defaults of the dgpu Qwen3.6 profile need them. The headline numbers below were measured on 786a71b; the added features are switched by environment variables and the speed numbers were not re-measured on the new pin.
-# Moved again to fork dev 2c4e12e (10e2bf7 plus per-request timing at GET /stats, EDGELLM_REQUEST_STATS, and the idle sleep stage of the CPU miss workers, EDGELLM_MOE_CPU_IDLE_MS); 10e2bf7 was (bb8d0a9 plus the growable KV pool, EDGELLM_KV_INITIAL_TOKENS, which composes with context reuse; also reasoning budget and control-token defanging). Off unless the variable is set.
-ARG FAST_REF_DGPU=2c4e12eca058f131ab3457b2af7112e8a8f53b58
+# Moved again to fork dev c3eb0eb (2c4e12e plus the stats page at /stats, the JSON at /api/stats and the memory figures: GPU, KV cache, expert cache, host, reuse snapshots); 2c4e12e was (10e2bf7 plus per-request timing at GET /stats, EDGELLM_REQUEST_STATS, and the idle sleep stage of the CPU miss workers, EDGELLM_MOE_CPU_IDLE_MS); 10e2bf7 was (bb8d0a9 plus the growable KV pool, EDGELLM_KV_INITIAL_TOKENS, which composes with context reuse; also reasoning budget and control-token defanging). Off unless the variable is set.
+ARG FAST_REF_DGPU=c3eb0eb79bb192a9c0dcc538c3741541b72b769f
 
 # Python dependencies of the exporter, the server and the quantisation tools (torch and numpy come from the base image).
 COPY poc/build/pins.txt /tmp/pins.txt
