@@ -1,4 +1,4 @@
-# faster-llm-poc
+# Proof of concept for faster Nvidia Edge LLM engines
 
 **Run language models fast on a small NVIDIA GPU or a Jetson, behind an OpenAI-compatible API you can plug into any chat UI.**
 
