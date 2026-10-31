@@ -35,6 +35,10 @@ The numbers in this table were measured with the Linux kernel's default DMA mapp
 
 ![Replay time, Qwen3.6-35B-A3B on an RTX 4060 laptop](docs/replay-qwen36.svg)
 
+Statistics of a Cybertiel reverse engineering session in Pi:
+
+<img width="974" height="1194" alt="image" src="https://github.com/user-attachments/assets/5eb1b99f-be2a-415b-9872-846dd934d596" />
+
 ## Quick start
 
 You need Docker with the NVIDIA container runtime and an NVIDIA GPU with 8 GB or more (the default model, Qwen3.6-35B-A3B, needs about 31 GB of system RAM and 60 GB of free disk; the small Gemma and Qwen3.5 models need less, see [Models and GPUs](#models-and-gpus)).
