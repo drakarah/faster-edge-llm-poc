@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 source config/common.sh
 CONFIG=config/$MODEL.sh; [ -f "config/$MODEL.$PROFILE.sh" ] && CONFIG=config/$MODEL.$PROFILE.sh   # a model can have a config of its own per profile
-[ -f "$CONFIG" ] || die "unknown MODEL '$MODEL' (gemma4-e4b | gemma4-12b | gemma4-26b | qwen35-4b | qwen36-35b)"
+[ -f "$CONFIG" ] || die "unknown MODEL '$MODEL' (gemma4-e4b | gemma4-12b | gemma4-26b | qwen35-4b | qwen36-35b | cybertiel-35b)"
 source "$CONFIG"
 [ "${BENCH_LONGCTX-__default__}" = __default__ ] && BENCH_LONGCTX=$LONGCTX_DEFAULT
 BENCH_LONGCTX=${BENCH_LONGCTX}   # long-context test prompt lengths in tokens, comma-separated; empty skips it (default per model in config/)

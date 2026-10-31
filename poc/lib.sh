@@ -223,6 +223,7 @@ build_from_export() {
   local f; for f in external_int4_moe_weights.safetensors embedding.safetensors; do
     if [ -e $SRC/llm/$f ]; then rm -f $FAST/engine/$f; ln -s $SRC/llm/$f $FAST/engine/$f; fi
   done
+  if [ -n "${CHAT_TEMPLATE:-}" ]; then cp "$CHAT_TEMPLATE" $FAST/engine/chat_template.jinja; fi
   build_stamp $FAST_REF > $FAST/.done
 }
 

@@ -1,0 +1,3 @@
+cybertiel-sharp-chat-template.jinja is the "Sharp" chat template v22.5.0 (built on froggeric's Qwen-Fixed-Chat-Templates),
+copied unchanged from https://huggingface.co/peculiar-ragdoll/Qwen-Sharp-Chat-Templates, licensed Apache-2.0
+(https://www.apache.org/licenses/LICENSE-2.0). It adds a terseness system prompt by default; the `terse` chat-template kwarg turns it off.

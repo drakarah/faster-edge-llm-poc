@@ -110,7 +110,7 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 | variable | values | |
 |---|---|---|
 | `PROFILE` | `dgpu` (default), `orin` | `dgpu`: discrete GPU, x86_64 or arm64; set `GPU_ARCH` (default 89 = RTX 40-series). `orin`: Jetson AGX Orin (sm_87) |
-| `MODEL` | `qwen36-35b` (default, dgpu only), `gemma4-e4b`, `gemma4-12b`, `qwen35-4b`, `gemma4-26b` (optimised arm only: stock Edge-LLM cannot load an engine built by the fork nor export the 51 GB checkpoint in 32 GB of RAM; `PROFILE=dgpu` uses `config/gemma4-26b.dgpu.sh` and the dgpu pin, and has not been run end to end from a clean data dir yet) | the models we measured |
+| `MODEL` | `qwen36-35b` (default, dgpu only), `cybertiel-35b` (dgpu only: [drakarah/Huihui-Ornith-1.5-35B-A3B-abliterated-EdgeLLM-INT4](https://huggingface.co/drakarah/Huihui-Ornith-1.5-35B-A3B-abliterated-EdgeLLM-INT4), refusals removed, run it sandboxed; 262,144-token window, growable KV pool, context reuse and the terse Sharp chat template, the settings of the live 4060 server in METRICS R25ev-R25ex; engine build is not re-run end to end from this repo yet), `gemma4-e4b`, `gemma4-12b`, `qwen35-4b`, `gemma4-26b` (optimised arm only: stock Edge-LLM cannot load an engine built by the fork nor export the 51 GB checkpoint in 32 GB of RAM; `PROFILE=dgpu` uses `config/gemma4-26b.dgpu.sh` and the dgpu pin, and has not been run end to end from a clean data dir yet) | the models we measured |
 | `HF_TOKEN` | token | needed for Gemma only |
 | `BENCH_CALLS`, `BENCH_ROUNDS` | 60, 2 | replayed requests per round, rounds per stack |
 | `BENCH_HUMANEVAL` | 164 | HumanEval problems per run (0 skips); public benchmark, pass@1 and tokens/s |
