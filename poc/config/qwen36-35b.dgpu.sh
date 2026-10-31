@@ -47,5 +47,12 @@ SERVE_ARGS="--tool-call-parser generic"   # no speculation flags; prefix reuse s
 #                                 Intel hybrid CPUs (unpinned elsewhere; the benefit of pinning has not been re-measured since the final fix).
 SERVE_ENV="EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe EDGELLM_EMBEDDING_ON_HOST=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_MOE_CACHE_SLOTS=auto EDGELLM_MOE_CACHE_RESERVE_MB=250 EDGELLM_MOE_PREFILL_OVERLAP=1 EDGELLM_MOE_CACHE_BIAS=${CACHE_BIAS:-0.5} EDGELLM_MOE_TAIL_SKIP=${TAIL_SKIP:-0} EDGELLM_MOE_CPU_MISS=${CPU_MISS:-1} EDGELLM_MOE_CPU_ADMIT=${CPU_ADMIT:-16} EDGELLM_MOE_CPU_INT8=${CPU_INT8:-1} EDGELLM_MOE_CPU_THREADS=${CPU_THREADS:-6} EDGELLM_MOE_CPU_CORES=${CPU_CORES:-auto}"
 DRAFTER_INT4_MLP=0
+# Chat defaults for a served endpoint (docker compose up), not for the benchmarks (they send temperature 0 and their own fields). Qwen's model-card "thinking, general tasks" settings, applied to requests that omit the field:
+#  EDGELLM_DEFAULT_ENABLE_THINKING=1   the model's own default; a request can still send chat_template_kwargs {"enable_thinking": false}. Thinking is not free: HumanEval 21-30/33 against 31/33 without, and it can run away
+#                                      (13 of 56 agent runs hit a 16,384-token cap in a repeat loop, METRICS R25dv, R25dw), so set max_tokens.
+#  EDGELLM_DEFAULT_TEMPERATURE=1.0, TOP_P=0.95, TOP_K=20, PRESENCE_PENALTY=1.5   (presence penalty needs this profile's plain engine: the runtime refuses it with speculation)
+#                                      The agent study's best arm (14/16 completed against 12/24) changed temperature and penalty together; their separate effect is not measured.
+#  EDGELLM_PRESERVE_THINKING=1         keeps the reasoning of earlier turns in the rendered history (agent loops); costs prompt tokens and prefix-reuse hits.
+CHAT_ENV="EDGELLM_DEFAULT_ENABLE_THINKING=${THINKING:-1} EDGELLM_DEFAULT_TEMPERATURE=${TEMPERATURE:-1.0} EDGELLM_DEFAULT_TOP_P=${TOP_P:-0.95} EDGELLM_DEFAULT_TOP_K=${TOP_K:-20} EDGELLM_DEFAULT_PRESENCE_PENALTY=${PRESENCE_PENALTY:-1.5} EDGELLM_PRESERVE_THINKING=${PRESERVE_THINKING:-1}"
 # Prebuilt export published for this model: `docker compose up` downloads it and only builds the engine (no 26 GB-RAM export, no hours of GPTQ). QUANTIZE=1 redoes the quantisation locally from the original weights.
 HF_ONNX_REPO=${HF_ONNX_REPO:-drakarah/Qwen3.6-35B-A3B-EdgeLLM-INT4}   # INT8-KV export (INT4 weights); downloaded instead of quantising

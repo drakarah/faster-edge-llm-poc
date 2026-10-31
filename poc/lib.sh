@@ -271,7 +271,7 @@ start_stock() {  # the stock server builds (first time) or loads (afterwards) it
 
 start_fast() {
   use_stack fast
-  (cd $STACK_ROOT && exec env $SERVE_ENV python -m experimental.server $FAST/engine --host 0.0.0.0 --port $1 \
+  (cd $STACK_ROOT && exec env $SERVE_ENV ${EXTRA_SERVE_ENV:-} python -m experimental.server $FAST/engine --host 0.0.0.0 --port $1 \
      --served-model-name local --enable-auto-tool-choice $SERVE_ARGS) > $LOG_DIR/$MODEL-$PROFILE-fast-server.log 2>&1 &
   SERVER_PID=$!
 }
@@ -331,6 +331,7 @@ report_clocks() {  # an unpinned Jetson GPU ramps with load and skews short benc
 
 serve() {
   step "serving the optimised stack on port $PORT (OpenAI API: http://localhost:$PORT/v1/chat/completions)"
+  EXTRA_SERVE_ENV=${CHAT_ENV:-}   # chat defaults apply to a served endpoint only; the benchmarks send their own sampling fields
   start_fast $PORT
   trap 'kill $SERVER_PID 2>/dev/null' TERM INT
   wait $SERVER_PID
