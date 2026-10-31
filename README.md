@@ -1,8 +1,10 @@
 # faster-llm-poc
 
-**Run big language models fast on a small NVIDIA GPU, behind an OpenAI-compatible API you can plug into any chat UI.**
+**Run language models fast on a small NVIDIA GPU or a Jetson, behind an OpenAI-compatible API you can plug into any chat UI.**
 
-A 35-billion-parameter model on an 8 GB laptop GPU is normally a patience exercise: most of the weights live in system RAM and the CPU does a lot of the work. This project keeps the weights in RAM but streams only what each step needs to the GPU, and a set of tricks makes that streaming cheap. Same laptop, same 60-request workload:
+This is a proof of concept for a set of optimisations in a fork of NVIDIA's TensorRT Edge-LLM, measured on several model families and two kinds of hardware: Qwen3.6-35B-A3B and a derivative of it (CyberTiel), Gemma 4 (26B-A4B, 12B and E4B) and Qwen3.5-4B, on an RTX 4060 laptop GPU (8 GB) and a Jetson AGX Orin (32 GB). The smaller models are compared side by side with stock Edge-LLM. The large mixture-of-experts models have no stock arm (stock cannot load them in 8 GB; they fit at all because of the streaming described below), so they are compared with llama.cpp where a baseline was run. Per-model numbers, caveats and everything that did not work are in the [Models and GPUs](#models-and-gpus) table and the results further down.
+
+The most extreme case is a 35-billion-parameter model on an 8 GB laptop GPU, normally a patience exercise: most of the weights live in system RAM and the CPU does a lot of the work. For the mixture-of-experts models this project keeps the weights in RAM but streams only what each step needs to the GPU, and a set of tricks makes that streaming cheap. As a headline example, Qwen3.6-35B-A3B on the same laptop and the same 60-request workload:
 
 | Qwen3.6-35B-A3B on an RTX 4060 laptop (8 GB, 31 GB RAM) | time for the 60 requests | decode, 300 tokens after a ~10-token prompt | prompt processing, one 3,000-token prompt |
 |---|---:|---:|---:|
@@ -18,7 +20,7 @@ The workload is a recording of a real app that turns user requests into SQL and 
 
 ## Quick start
 
-You need Docker with the NVIDIA container runtime and an NVIDIA GPU with 8 GB or more (the default model needs about 31 GB of system RAM and 60 GB of free disk).
+You need Docker with the NVIDIA container runtime and an NVIDIA GPU with 8 GB or more (the default model, Qwen3.6-35B-A3B, needs about 31 GB of system RAM and 60 GB of free disk; the small Gemma and Qwen3.5 models need less, see [Models and GPUs](#models-and-gpus)).
 
 ```bash
 git clone https://github.com/drakarah/faster-llm-poc.git && cd faster-llm-poc
