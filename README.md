@@ -35,9 +35,10 @@ The numbers in this table were measured with the Linux kernel's default DMA mapp
 
 ![Replay time, Qwen3.6-35B-A3B on an RTX 4060 laptop](docs/replay-qwen36.svg)
 
-Statistics of a Cybertiel reverse engineering session in Pi:
+Statistics of a Cybertiel reverse engineering session in Pi with compaction:
 
-<img width="974" height="1194" alt="image" src="https://github.com/user-attachments/assets/5eb1b99f-be2a-415b-9872-846dd934d596" />
+<img width="951" height="1226" alt="image" src="https://github.com/user-attachments/assets/3fbb33d0-815d-4aa2-a1d1-293527f044f3" />
+
 
 ## Quick start
 
