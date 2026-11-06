@@ -6,7 +6,7 @@
 KIND=qwen36moe          # model family handled by the builder: layer-wise expert GPTQ, then layer-wise dense GPTQ, INT8 KV scales shipped in poc/data
 NO_STOCK=1              # no stock arm (see above): the table has the optimised arm only
 NO_SPEC=1               # plain autoregressive engine, no drafter
-LONGCTX_DEFAULT=2048,6000,8500   # the engine holds 12,288 tokens (MAXIN = CAP: a hybrid engine cannot chunk its prompt, so the input limit is the longest prompt); 16,384 does not load next to the expert cache
+LONGCTX_DEFAULT=2048,6000,8500   # the engine holds 12,288 tokens; prefill passes are 8,192 (MAXIN < CAP: the hybrid plain prefill chunks its prompt, fork 6c768ce, in the pin); 16,384 does not load next to the expert cache
 BASE_REPO=Qwen/Qwen3.6-35B-A3B
 ASSIST_REPO=            # empty: no MTP assistant (see above)
 # Quantisation, all with generic calibration text (Wikipedia nl/en/fr + source code), never the benchmark prompts:
@@ -18,7 +18,7 @@ DENSE_PARTS=shared,head,gdn,attn
 # INT8 KV cache (only the 10 full-attention layers own a KV cache) with per-layer scales calibrated on this model (tools/calibrate_int8_kv_layerwise_qwen36.py, 64 x 1,024 tokens; the file ships in poc/data):
 # 89/90 needles, replay -3% at 12k. XQA_MULTI_BLOCK = split-KV decode attention.
 KV_SCALES=$POC/data/qwen36-35b-int8-kv-scales.json
-MAXIN=12288; CAP=12288; POOL=0; TREE=1   # POOL=0: no extra KV pages; TREE unused
+MAXIN=8192; CAP=12288; POOL=0; TREE=1   # POOL=0: no extra KV pages; TREE unused
 EXPORT_ENV="EDGELLM_INT8_KV_SCALES=$KV_SCALES"
 # --externalize-weights int4_moe keeps the expert weights (and the embedding table) as separate files next to the engine, which the plugin streams from host memory.
 EXPORT_ARGS="--externalize-weights int4_moe --skip-visual --skip-audio"
