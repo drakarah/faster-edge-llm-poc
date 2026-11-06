@@ -8,8 +8,8 @@ KV_INITIAL_TOKENS=${KV_INITIAL_TOKENS:-12288}   # growable KV pool, see qwen36-3
 source "$(dirname "${BASH_SOURCE[0]}")/qwen36-35b.dgpu.sh"
 BASE_REPO=huihui-ai/Huihui-Ornith-1.5-35B-A3B-abliterated
 HF_ONNX_REPO=${_user_onnx_repo:-drakarah/Huihui-Ornith-1.5-35B-A3B-abliterated-EdgeLLM-INT4}   # INT8 KV scales ship inside the export
-# A 262,144-token window: passes stay at 12,288 tokens (MAXIN), the KV capacity is 262,144. A static pool of that size leaves 16 expert slots (59.1 tok/s); the growable pool keeps 56 (84.1 tok/s).
-MAXIN=12288; CAP=262144
+# A 262,144-token window: prefill passes are 8,192 tokens (MAXIN; 60 expert slots against 53 at 12,288, same cold TTFT on a 148k prompt, 4060 sweep), the KV capacity is 262,144. A static pool of that size leaves 16 expert slots (59.1 tok/s); the growable pool keeps 56 (84.1 tok/s).
+MAXIN=8192; CAP=262144
 # The terse "Sharp" template of the model card (thinks and talks less); the checkpoint's own template is the alternative (leave CHAT_TEMPLATE empty). Copied over the engine's template after the build.
 CHAT_TEMPLATE=${CHAT_TEMPLATE-$POC/data/cybertiel-sharp-chat-template.jinja}
 # Context reuse with host-memory snapshots (agents resend a growing prefix: 14 turns at up to 68k tokens 23.3 s/turn without, 3.6 with; a live 116-request session reached 97.6% of prompt tokens from reuse, 88k tokens at most).
