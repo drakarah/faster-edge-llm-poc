@@ -34,7 +34,8 @@ from safetensors.torch import save_file
 
 CLIP_RATIOS = [1.0, 0.97, 0.94, 0.91, 0.88, 0.85, 0.82, 0.79, 0.76]
 QUANTIZED_MODULE_NAMES = ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj",
-                          "mlp.gate_proj", "mlp.up_proj", "mlp.down_proj", "per_layer_input_gate",
+                          "mlp.gate_proj", "mlp.up_proj", "mlp.down_proj", "linear_attn.in_proj_qkv", "linear_attn.in_proj_z",
+                          "linear_attn.out_proj", "per_layer_input_gate",
                           "per_layer_projection", "per_layer_model_projection"]
 COPY_FILES = ["chat_template.jinja", "generation_config.json", "processor_config.json",
               "tokenizer.json", "tokenizer_config.json"]

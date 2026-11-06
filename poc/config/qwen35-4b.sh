@@ -17,7 +17,8 @@ if [ "$PROFILE" = orin ]; then SNAP=1610612736; else SNAP=536870912; fi        #
 # Tree: 1 candidate x 3 steps, 4 verify nodes = a chain, with the 32k reduced-vocabulary drafter head (--draft-reduced-vocab-dir, worth 13%). The tree export cannot use the reduced head and a tree buys at most 1.8% over a chain
 # with the same head (replay-60: reduced chain 102.5 s, full-vocabulary tree 2x5/12 116.0 s, full chain 118.1 s, single runs), so tree drafting stays off on Qwen.
 # The two pool-bytes flags size the recurrent-state snapshots (1.5 GB Orin / 0.5 GB dgpu) and partial-KV snapshots (128 MB) that make prefix reuse work for a hybrid model.
-SERVE_ARGS="--draft-top-k 1 --draft-step 3 --verify-tree-size 4 --reasoning-parser qwen3 --enable-context-reuse --context-cache-recurrent-snapshot-pool-bytes $SNAP --context-cache-partial-kv-snapshot-pool-bytes 134217728 --tool-call-parser generic"
+# Qwen templates end the generation prompt with <think>, so the model only emits </think>; `auto` does not resolve for an engine directory named otherwise.
+SERVE_ARGS="--draft-top-k 1 --draft-step 3 --verify-tree-size 4 --enable-context-reuse --context-cache-recurrent-snapshot-pool-bytes $SNAP --context-cache-partial-kv-snapshot-pool-bytes 134217728 --tool-call-parser generic --reasoning-parser qwen3"
 # HYBRID_DIVERGENCE_CHECKPOINT=256: checkpoint the recurrent state every 256 tokens so a hybrid model can reuse cross-request prefixes (replay-396 -34%, upstream refuses it).
 # GDN_CHUNK_PREFILL=1: chunked prompt pass for the gated delta-net layers (replay-60 104.2 -> 102.5 s, -1.6%, it is also the fork's default). INT4_GEMV_MAX_M=1 (Orin): GEMM from 2 tokens (+11% decode).
 SERVE_ENV="EDGELLM_FORCE_GREEDY=1 EDGELLM_JSON_MAX_WHITESPACE=20 EDGELLM_HYBRID_DIVERGENCE_CHECKPOINT=256 EDGELLM_GDN_CHUNK_PREFILL=1"
