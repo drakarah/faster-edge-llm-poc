@@ -149,6 +149,37 @@ quantise_qwen36moe() {
   rm -rf $WORK $BASE
 }
 
+quantise_qwen38() {
+  # RedHatAI's compressed-tensors INT4 is repacked bit-exact to GPTQ g128 (no re-rounding); the bf16 MTP layer is merged in; the base model also gets an INT4 lm_head.
+  need_memory_gb 28
+  use_stack fast
+  mkdir -p $WORK
+  step "repack to GPTQ g128 (bit-exact)"
+  python $POC/tools/ct_to_gptq.py $BASE $WORK/gptq --group-size 128
+  step "merge the bf16 MTP layer, quantise the lm_head to INT4"
+  python $POC/tools/qwen38_prepare.py $BASE $WORK/gptq $CKPT_DIR/bf16head $CKPT_DIR/int4head
+  rm -rf $WORK
+}
+
+# Qwen3.8: base model with the INT4 head (export of $CKPT_DIR/int4head), drafter with the bf16 reduced head (export of $CKPT_DIR/bf16head).
+build_fast_qwen38() {
+  step "optimised stack: export (INT4 head, bf16 head)"
+  use_stack fast
+  need_memory_gb 28
+  rm -rf $FAST; mkdir -p $FAST
+  env $EXPORT_ENV python -m tensorrt_edgellm.scripts.export $CKPT_DIR/bf16head $FAST/onnx_bf16 $EXPORT_ARGS 2>&1 | tee $LOG_DIR/$MODEL-$PROFILE-export-bf16head.log | tail -n 3
+  env $EXPORT_ENV python -m tensorrt_edgellm.scripts.export $CKPT_DIR/int4head $FAST/onnx_int4 ${EXPORT_ARGS/--externalize-weights all/--externalize-weights int4_ffn} 2>&1 | tee $LOG_DIR/$MODEL-$PROFILE-export-int4head.log | tail -n 3
+  step "optimised stack: engines"
+  export EDGELLM_XQA_MULTI_BLOCK=auto
+  local COMMON="--maxInputLen $MAXIN --maxKVCacheCapacity $CAP --maxBatchSize 1" OUT=$FAST/engine
+  mkdir -p $OUT
+  $LLM_BUILD --onnxDir $FAST/onnx_int4/llm --engineDir $OUT $COMMON --maxVerifyTreeSize $TREE --specBase > $LOG_DIR/$MODEL-$PROFILE-build-base.log 2>&1
+  local f; for f in embedding.safetensors external_int4_ffn_weights.safetensors; do ln -f $FAST/onnx_int4/llm/$f $OUT/$f; done
+  $LLM_BUILD --onnxDir $FAST/onnx_bf16/mtp_draft --engineDir $OUT $COMMON --maxDraftTreeSize $TREE --specDraft > $LOG_DIR/$MODEL-$PROFILE-build-draft.log 2>&1
+  rm -rf $FAST/onnx_bf16 $FAST/onnx_int4
+  build_stamp $FAST_REF > $FAST/.done
+}
+
 build_stamp() {  # $1 pinned commit of the stack: changes when the image is rebuilt on another commit or the model config changes
   echo "$1 $(md5sum $POC/$CONFIG | cut -c1-12)"
 }
@@ -169,6 +200,7 @@ builder() {
 }
 
 build_fast() {
+  [ "$KIND" = qwen38 ] && { build_fast_qwen38; return; }
   step "optimised stack: export"
   use_stack fast
   need_memory_gb 28
@@ -218,12 +250,24 @@ build_from_export() {
   fi
   [ -d $SRC/llm ] || die "$SRC/llm not found: not an Edge-LLM export"
   rm -rf $FAST; mkdir -p $FAST
-  build_engines $SRC
+  local ROOT=$SRC
+  # A published export can carry its speculative parts next to the plain model: mtp/base (the graph with hidden-state outputs and its config) and mtp/draft. The weight files of llm/ are shared:
+  # the speculative root is llm/ with those two files replaced (symlinks for the rest), plus the drafter as mtp_draft/.
+  if [ "${NO_SPEC:-0}" != 1 ] && [ ! -d $SRC/mtp_draft ] && [ -f $SRC/mtp/base/model.onnx ] && [ -d $SRC/mtp/draft ]; then
+    ROOT=$DATA/onnx/$MODEL-spec; rm -rf $ROOT; mkdir -p $ROOT/llm
+    local f; for f in $SRC/llm/*; do ln -s $f $ROOT/llm/$(basename $f); done
+    rm -f $ROOT/llm/model.onnx $ROOT/llm/config.json; cp $SRC/mtp/base/model.onnx $SRC/mtp/base/config.json $ROOT/llm/
+    ln -s $SRC/mtp/draft $ROOT/mtp_draft
+  elif [ "${NO_SPEC:-0}" != 1 ] && [ ! -d $SRC/mtp_draft ]; then
+    echo "no mtp/ in the export: building the plain engine (NO_SPEC=1)"; NO_SPEC=1; source "$CONFIG"   # the config derives its serve arguments from NO_SPEC
+  fi
+  build_engines $ROOT
   # the engine keeps its large weight files as links to the export (a second 17 GB copy would not fit next to it on most disks)
   local f; for f in external_int4_moe_weights.safetensors embedding.safetensors; do
     if [ -e $SRC/llm/$f ]; then rm -f $FAST/engine/$f; ln -s $SRC/llm/$f $FAST/engine/$f; fi
   done
   if [ -n "${CHAT_TEMPLATE:-}" ]; then cp "$CHAT_TEMPLATE" $FAST/engine/chat_template.jinja; fi
+  if [ "${NO_SPEC:-0}" = 1 ]; then touch $FAST/.plain; fi   # a later `serve` run re-reads this to pick the plain serve arguments
   build_stamp $FAST_REF > $FAST/.done
 }
 
