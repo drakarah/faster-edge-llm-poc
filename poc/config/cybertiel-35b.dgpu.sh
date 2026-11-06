@@ -15,6 +15,6 @@ CHAT_TEMPLATE=${CHAT_TEMPLATE-$POC/data/cybertiel-sharp-chat-template.jinja}
 # Context reuse with host-memory snapshots (agents resend a growing prefix: 14 turns at up to 68k tokens 23.3 s/turn without, 3.6 with; a live 116-request session reached 97.6% of prompt tokens from reuse, 88k tokens at most).
 # EDGELLM_HYBRID_PLAIN_TAIL_CHECKPOINT=1 keeps one checkpoint per request tail so a hybrid (linear attention) model can restore it.
 SERVE_ENV="$SERVE_ENV EDGELLM_HYBRID_PLAIN_TAIL_CHECKPOINT=1"
-SERVE_ARGS="--tool-call-parser generic --enable-context-reuse --context-cache-snapshots-in-host-memory --context-cache-recurrent-snapshot-pool-bytes 268435456 --context-cache-partial-kv-snapshot-pool-bytes 67108864"
+SERVE_ARGS="--tool-call-parser generic --reasoning-parser qwen3 --enable-context-reuse --context-cache-snapshots-in-host-memory --context-cache-recurrent-snapshot-pool-bytes 268435456 --context-cache-partial-kv-snapshot-pool-bytes 67108864"
 # CHAT_ENV is the one of qwen36-35b.dgpu.sh (thinking on, temperature 1.0, top_p 0.95, top_k 20, presence penalty 1.5, preserved thinking) plus the growable pool above.
 # Clients must send max_tokens (without it the first request maps the whole pool); the model's reasoning can run away (3 of 24 agent runs hit 16,384 tokens with the Qwen3.6 arm at 12).

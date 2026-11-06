@@ -26,7 +26,7 @@ INT8_EMBEDDINGS=0
 # EDGELLM_MOE_STAGE_EXPERTS=2 at engine build: the MoE plugin stages routed experts into private buffers so the prefill copy overlaps the previous layer's GEMMs.
 # EDGELLM_MOE_TOKEN_TILE=4096 at engine build: the expert GEMM pipeline of a prefill pass runs over tiles of 4,096 tokens, so the 12k engine's workspace shrinks and 9 more cache slots fit (55 -> 64 per layer, decode +5%).
 BUILD_ENV="EDGELLM_MOE_STAGE_EXPERTS=2 EDGELLM_MOE_TOKEN_TILE=4096"
-SERVE_ARGS="--tool-call-parser generic"   # no speculation flags; prefix reuse stays off (each checkpoint split costs an extra expert-streaming pass: replay-20 77.5 -> 100 s)
+SERVE_ARGS="--tool-call-parser generic --reasoning-parser qwen3"   # no speculation flags; prefix reuse stays off (each checkpoint split costs an extra expert-streaming pass: replay-20 77.5 -> 100 s)
 # Serve environment, one reason each:
 #  EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe  experts live in pinned host memory (the point of this profile)       EDGELLM_EMBEDDING_ON_HOST=1  the embedding table too
 #  EDGELLM_JSON_MAX_WHITESPACE=20   as in every profile (README). EDGELLM_FORCE_GREEDY is not set: this profile has no speculation, so a request keeps its own temperature (forced greedy decoding can make a thinking model loop in long reasoning)
