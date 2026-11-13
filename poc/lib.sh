@@ -180,6 +180,33 @@ build_fast_qwen38() {
   build_stamp $FAST_REF > $FAST/.done
 }
 
+# Qwen3.8 with the DFlash2 block drafter: the INT4-head checkpoint for the base (as the MTP profile), the drafter quantised to INT4 g128.
+quantise_qwen38df2() {
+  need_memory_gb 28
+  use_stack fast
+  mkdir -p $WORK
+  step "repack to GPTQ g128 (bit-exact)"
+  python $POC/tools/ct_to_gptq.py $BASE $WORK/gptq --group-size 128
+  step "quantise the lm_head to INT4"
+  python $POC/tools/qwen38_prepare.py $BASE $WORK/gptq $CKPT_DIR/bf16head $CKPT_DIR/int4head
+  step "quantise the DFlash2 drafter to INT4 g128 (layers and fc projection)"
+  python $POC/tools/dflash2_quantize.py $ASSIST $DRAFT_CKPT
+  rm -rf $WORK
+}
+
+# Checkpoint-direct builder (no ONNX export): base and draft engines in one call, weights stay in the checkpoints (the server reads them at load).
+build_fast_qwen38df2() {
+  step "optimised stack: engines (checkpoint-direct builder, DFlash2 draft, verify tree $TREE)"
+  use_stack fast
+  need_memory_gb 28
+  rm -rf $FAST; mkdir -p $FAST/engine
+  (cd $STACK_ROOT && env $BUILD_ENV python -m experimental.builder.cli --model-dir $CKPT_DIR/int4head --draft-model-dir $DRAFT_CKPT --spec-type dflash \
+     --engine-dir $FAST/engine --components llm --max-input-len $MAXIN --max-kv-cache-capacity $CAP --max-batch-size 1 \
+     --max-verify-tree-size $TREE --max-draft-tree-size $TREE $BUILD_ARGS) > $LOG_DIR/$MODEL-$PROFILE-build.log 2>&1 \
+    || die "engine build failed, see $LOG_DIR/$MODEL-$PROFILE-build.log"
+  build_stamp $FAST_REF > $FAST/.done
+}
+
 build_stamp() {  # $1 pinned commit of the stack: changes when the image is rebuilt on another commit or the model config changes
   echo "$1 $(md5sum $POC/$CONFIG | cut -c1-12)"
 }
@@ -201,6 +228,7 @@ builder() {
 
 build_fast() {
   [ "$KIND" = qwen38 ] && { build_fast_qwen38; return; }
+  [ "$KIND" = qwen38df2 ] && { build_fast_qwen38df2; return; }
   step "optimised stack: export"
   use_stack fast
   need_memory_gb 28
