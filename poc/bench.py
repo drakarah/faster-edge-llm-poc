@@ -44,7 +44,7 @@ def stream_answer(url, messages, max_tokens):
     if not SERVER_DEFAULTS:
         body["temperature"] = 0
     body.update(json.loads(os.environ.get("BENCH_EXTRA_BODY") or "{}"))   # e.g. {"chat_template_kwargs": {"enable_thinking": false}} for servers that think by default
-    t0 = time.perf_counter(); first = last = None; pt = ct = 0; text = ""
+    t0 = time.perf_counter(); first = last = fin = None; pt = ct = 0; text = ""
     with post(url, body) as f:
         for raw in f:
             line = raw.decode().strip()
@@ -59,6 +59,10 @@ def stream_answer(url, messages, max_tokens):
             if delta.get("content") or (SERVER_DEFAULTS and (delta.get("reasoning_content") or delta.get("reasoning"))):
                 now = time.perf_counter()
                 first = first or now; last = now
+            if (d.get("choices") or [{}])[0].get("finish_reason") and fin is None:
+                fin = time.perf_counter()   # the stop chunk: when the only token generated is hidden (a template marker with a one-token cap), this is its time
+    if first is None and ct and fin:
+        first = last = fin
     if first is None:
         raise RuntimeError("no tokens streamed")
     return first - t0, last - first, ct, pt, text
