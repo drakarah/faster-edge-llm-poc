@@ -895,7 +895,7 @@ The warm first token equals the cold one here because the questions asked betwee
 
 
 #### inkling2 (optimised arm only)
-One run each, no stock or llama.cpp arm (stock cannot load a looped model, and every expert would have to fit on the GPU). Fork `feat/inkling2` (merge into `dev` prepared, not yet in it), RTX 4060 laptop GPU (8 GB, PCIe 4.0 x8, i9-12900H, 31 GB RAM), the settings of `poc/config/inkling2.dgpu.sh`: 2,048-token prefill passes, execution-context overlay, host-resident embedding table, int8 CPU miss path (6 pinned threads, admit 16), exact routing unless stated. Decode = 700 greedy tokens after a 45-token prompt (tok/s = 1000 / ms per token); prompt processing = one 7,580-token prompt. This is the engine the settings were tuned on; the numbers were measured from the fork's `llm_inference` and through its server, not yet through `docker compose` from this repo.
+One run each, no stock or llama.cpp arm (stock cannot load a looped model, and every expert would have to fit on the GPU). Fork `feat/inkling2`, RTX 4060 laptop GPU (8 GB, PCIe 4.0 x8, i9-12900H, 31 GB RAM), the settings of `poc/config/inkling2.dgpu.sh`: 2,048-token prefill passes, execution-context overlay, host-resident embedding table, int8 CPU miss path (6 pinned threads, admit 16), exact routing unless stated. Decode = 700 greedy tokens after a 45-token prompt (tok/s = 1000 / ms per token); prompt processing = one 7,580-token prompt.
 
 | | value |
 |---|---:|
@@ -927,6 +927,6 @@ Without the overlay the 2,048 and 4,096 engines had 33 and 25 slots and decoded 
 
 **Long context and agents.** Needle prompts ("remember this vault passphrase" at the very beginning, asked at the end) answered correctly at 7.6K tokens from the engine and, through the server with short chats in between and a different passphrase each time, at 5.9K, 20.0K, 20.0K and 39.0K tokens (37.6 s, 16.8 s, 41.9 s, 75.9 s including the reasoning). A 95,870-token prompt was answered correctly in 491 s with the expert cache giving memory back to the KV pool and the next turn in 17 s (older engine). The prefix cache (host snapshots of the sliding-window KV after each prompt and every 4,096 prompt tokens, 6 GiB) makes an agent turn on a 28-30K-token prompt answer in 2.8-4.0 s; a 4,100-token system prompt took 7.9 s cold and 3.0-4.0 s cached. Decode of 700 tokens after a 7,580-token prompt: 36.5 ms/token. Prompt processing of new tokens falls with the context (about 500 tok/s beyond 20K tokens).
 
-**Limits and open points.** One run per cell, no repeat spread (differences below about 0.4 ms of decode are within the spread seen between identical runs); long-prompt greedy output is not byte-deterministic; the CPU path needs six performance cores that nothing else uses; the server's dashboard prefill rate counts cached prompt tokens as new (the prefix cache does not report its hits to it yet), so read prefill speed from the table above, not from `/stats`; `/health` reports `context_reuse: false` because it watches the generic context cache, not the sliding-window prefix cache.
+**Limits.** One run per cell, no repeat spread (differences below about 0.4 ms of decode are within the spread seen between identical runs); long-prompt greedy output is not byte-deterministic; the CPU path needs six performance cores that nothing else uses.
 
 </details>
