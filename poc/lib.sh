@@ -168,7 +168,33 @@ builder() {
   step "builder finished"
 }
 
+# Inkling 2 Mini: the prepared checkpoint is the original download, linked, plus NVFP4 expert sidecars, the FP8 dense projections and a config the builder reads.
+quantise_inkling2() {
+  need_memory_gb 20
+  step "Inkling 2: merged checkpoint directory"
+  use_stack fast
+  rm -rf $CKPT
+  python $POC/tools/inkling2_merge_checkpoint.py $BASE $CKPT
+  step "Inkling 2: NVFP4 experts for the Marlin MoE plugin (one global scale per layer)"
+  python $POC/tools/inkling2_nvfp4_sidecar.py $BASE $CKPT
+  step "Inkling 2: FP8 dense projections (shipped activation calibration)"
+  python $POC/tools/inkling2_fp8_dense.py $POC/data/inkling2-fp8-amax.json $CKPT $BASE
+}
+
+# The engine of a model the experimental builder reads straight from the checkpoint (no ONNX export).
+build_fast_checkpoint() {
+  step "optimised stack: engine from the checkpoint"
+  use_stack fast
+  rm -rf $FAST; mkdir -p $FAST/engine
+  (cd $STACK_ROOT && env ${BUILD_ENV:-} python -c "from experimental.builder.cli import main; main()" \
+     --model-dir $CKPT --engine-dir $FAST/engine --max-input-len $MAXIN --max-kv-cache-capacity $CAP --max-batch-size 1 \
+     --plugin-path $STACK_ROOT/build/libNvInfer_edgellm_plugin.so) > $LOG_DIR/$MODEL-$PROFILE-build.log 2>&1 || { tail -n 20 $LOG_DIR/$MODEL-$PROFILE-build.log; die "engine build failed (log: $LOG_DIR/$MODEL-$PROFILE-build.log)"; }
+  if [ -n "${CHAT_TEMPLATE:-}" ]; then cp "$CHAT_TEMPLATE" $FAST/engine/chat_template.jinja; fi
+  build_stamp $FAST_REF > $FAST/.done
+}
+
 build_fast() {
+  [ "$KIND" = inkling2 ] && { build_fast_checkpoint; return; }
   step "optimised stack: export"
   use_stack fast
   need_memory_gb 28

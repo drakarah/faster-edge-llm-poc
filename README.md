@@ -95,6 +95,22 @@ BENCH_URL=http://host.docker.internal:8080 BENCH_LABEL=stock docker compose run 
 
 Pick another model with `MODEL=` in `.env` (see `.env.example`). Gemma needs a Hugging Face token of an account that accepted its licence. All measurements were taken on one RTX 4060 box (i9-12900H, 31 GB RAM, PCIe 4.0 x8) and one Jetson AGX Orin; other cards are untested, and the 4060 numbers depend on the card's 8 GB (they are labelled 4060-specific where it matters).
 
+## Inkling 2 Mini: looped mixture of experts on an 8 GB card
+
+`MODEL=inkling2 BASE_REPO=<repository of the original checkpoint> docker compose up` (dgpu only; the engine is built from the checkpoint by the fork's builder, there is no published export). Inkling 2 Mini visits its 24 layers 48 times per token (a loop over 12 of them, three passes) with 128 routed experts per layer and top-8 sigmoid routing, short convolutions instead of most attention, and a 262,144-token window. The 13.1 GB of NVFP4 experts stay in pinned host memory and a per-layer expert cache fills the rest of the 8 GB card; the part of TensorRT's activation memory that decode does not use is lent to that cache, and the token embedding table stays in host memory.
+
+Measured on an RTX 4060 laptop-class card (8 GB, PCIe 4.0 x8, 31 GB RAM), one run each, exact routing unless stated, decode = 700 greedy tokens after a 45-token prompt:
+
+| setting | decode | prompt processing |
+|---|---:|---:|
+| exact routing (default): 48 expert slots per layer, int8 CPU miss path | 33.3 ms/token (30 tok/s) | 784 tok/s on a 7,580-token prompt (2,048-token passes) |
+| `TAIL_SKIP=6` (lossy, KL divergence +0.0022) | 31.6 ms | |
+| `TAIL_SKIP=2 TAIL_MIN_WEIGHT=0.08` (lossy, +0.0038) | 29.0 ms | |
+| `TAIL_SKIP=2 TAIL_MIN_WEIGHT=0.10` (lossy, +0.0083) | 28.2 ms | |
+| `TAIL_SKIP=4` (lossy, +0.0099, top-1 agreement -2.7 points) | 28.0 ms | |
+
+Quality against the bf16 reference (teacher-forced decode, 16 x 96 forced tokens): mean KL divergence 0.0103, top-1 agreement 94.8% for the exact setting. A 7,580-token needle prompt and needles at 6K, 20K and 39K tokens through the server (with short chats in between) were all answered correctly. Through the server a turn costs about 2.3 s before the first token even for a short prompt, because every prefill pass streams all the experts over PCIe; with the prefix cache a 28K-token agent turn answers in 3-4 s. Prompt processing of new tokens falls with the context (about 500 tok/s beyond 20K tokens). The lossy settings are off by default: judge them on your own tasks (no task benchmark has been run on this model).
+
 ## Long context and agents (Qwen3.6 and CyberTiel on the RTX 4060)
 
 The 60-request replay above has no growing conversation. An agent resends a longer prompt every turn, so what matters is context reuse and the cost of a long window. These numbers were measured on the 4060 box with engines built the way the profiles build them (`config/qwen36-35b.dgpu.sh`, `config/cybertiel-35b.dgpu.sh`), **not** re-run from a clean data directory through `docker compose`.
@@ -150,7 +166,7 @@ Every step resumes from `./data`, so an interrupted run continues where it stopp
 | variable | values | |
 |---|---|---|
 | `PROFILE` | `dgpu` (default), `orin` | `dgpu`: discrete GPU, x86_64 or arm64; set `GPU_ARCH` (default 89 = RTX 40-series). `orin`: Jetson AGX Orin (sm_87) |
-| `MODEL` | `qwen36-35b` (default, dgpu only), `cybertiel-35b` (dgpu only: [drakarah/Huihui-Ornith-1.5-35B-A3B-abliterated-EdgeLLM-INT4](https://huggingface.co/drakarah/Huihui-Ornith-1.5-35B-A3B-abliterated-EdgeLLM-INT4), refusals removed, run it sandboxed; 262,144-token window, growable KV pool, context reuse and the terse Sharp chat template, the settings of the live 4060 server; engine build is not re-run end to end from this repo yet), `gemma4-e4b`, `gemma4-12b`, `qwen35-4b`, `gemma4-26b` (optimised arm only: stock Edge-LLM cannot load an engine built by the fork nor export the 51 GB checkpoint in 32 GB of RAM; `PROFILE=dgpu` uses `config/gemma4-26b.dgpu.sh` and the dgpu pin, and has not been run end to end from a clean data dir yet) | the models we measured |
+| `MODEL` | `qwen36-35b` (default, dgpu only), `inkling2` (dgpu only: Inkling 2 Mini, a looped 26B mixture of experts with a 262,144-token window; set `BASE_REPO` to the Hugging Face repository of the original checkpoint, see [Inkling 2 Mini](#inkling-2-mini-looped-mixture-of-experts-on-an-8-gb-card)), `cybertiel-35b` (dgpu only: [drakarah/Huihui-Ornith-1.5-35B-A3B-abliterated-EdgeLLM-INT4](https://huggingface.co/drakarah/Huihui-Ornith-1.5-35B-A3B-abliterated-EdgeLLM-INT4), refusals removed, run it sandboxed; 262,144-token window, growable KV pool, context reuse and the terse Sharp chat template, the settings of the live 4060 server; engine build is not re-run end to end from this repo yet), `gemma4-e4b`, `gemma4-12b`, `qwen35-4b`, `gemma4-26b` (optimised arm only: stock Edge-LLM cannot load an engine built by the fork nor export the 51 GB checkpoint in 32 GB of RAM; `PROFILE=dgpu` uses `config/gemma4-26b.dgpu.sh` and the dgpu pin, and has not been run end to end from a clean data dir yet) | the models we measured |
 | `HF_TOKEN` | token | needed for Gemma only |
 | `REQUEST_STATS` | 1 (Qwen3.6 and CyberTiel dgpu) | the dashboard at `/stats` and its JSON at `/api/stats` (`EDGELLM_REQUEST_STATS`); 0 turns the per-request part off; `POST /api/stats/reset` clears it |
 | `KV_INITIAL_TOKENS` | unset (Qwen3.6 dgpu), 12288 (CyberTiel) | growable KV pool: tokens mapped at the start (`EDGELLM_KV_INITIAL_TOKENS`); clients must send `max_tokens` |
