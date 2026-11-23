@@ -61,7 +61,8 @@ SERVE_ENV="EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe EDGELLM_HOST_CHECKPOINT_WEIGHT
 # Chat defaults for a served endpoint (not for the benchmarks, which send their own fields), applied to requests that omit the field:
 #  EDGELLM_DEFAULT_ENABLE_THINKING=1        the model thinks by default (its template's default reasoning effort is 0.9); a request can send chat_template_kwargs {"enable_thinking": false}. Thinking costs tokens: set max_tokens.
 #  EDGELLM_DEFAULT_TEMPERATURE=1.0          the checkpoint's own generation_config (do_sample, temperature 1.0).
-#  EDGELLM_DEFAULT_TOP_P=0.95, EDGELLM_DEFAULT_TOP_K=20   not from this model (its generation config sets neither): carried over from the Qwen3.6 profile, not validated for Inkling.
+#  EDGELLM_DEFAULT_TOP_P=${TOP_P:-0.9999}, EDGELLM_DEFAULT_TOP_K=${TOP_K:-0}   the vendor-equivalent sampling: llama.cpp users of Inkling 2 are given `--temp 1.0 --top-p 1.0 --top-k 0 --min-p 0.0` (Unsloth's Inkling 2 page; the model card itself names no values).
+#                                           The sampler cannot run untruncated: temperature 1.0 with top_p 1.0 and no top-k takes the greedy branch, so top_p is 0.9999 (the tail beyond 99.99% of the mass is cut) and top_k 0 is off.
 #  EDGELLM_DEFAULT_PRESENCE_PENALTY=0.0     none: the model card asks for none.
 #  EDGELLM_REASONING_EFFORT_PASSTHROUGH=1   the template takes the level names minimal / low / medium / high / xhigh / max or a number in [0, 0.99]; the server's default mapping would collapse them to Qwen's three levels. A word the template does not know
 #                                           falls back to medium (and is logged), a number is clamped; none / off / disabled / false turn thinking off.
@@ -70,6 +71,6 @@ SERVE_ENV="EDGELLM_HOST_EXTERNAL_WEIGHTS=int4_moe EDGELLM_HOST_CHECKPOINT_WEIGHT
 #                                           taking the memory from the expert cache (48 -> 16 slots) and the cache does not grow back: decode fell from 30 to 15 tok/s after one such request (measured with the bench replay,
 #                                           HumanEval greedy 14.3 tok/s). 16,384 plus a 2,048-token prompt stays inside the 20,480-token KV pool that is mapped at start. Clients that need more send max_tokens.
 #  EDGELLM_PRESERVE_THINKING=1              inert for this model: it only affects templates that read preserve_thinking (Qwen3.5/3.6). Earlier turns' reasoning stays in the history when the client sends reasoning_content back, which this template always renders.
-CHAT_ENV="EDGELLM_DEFAULT_ENABLE_THINKING=${THINKING:-1} EDGELLM_DEFAULT_TEMPERATURE=${TEMPERATURE:-1.0} EDGELLM_DEFAULT_TOP_P=${TOP_P:-0.95} EDGELLM_DEFAULT_TOP_K=${TOP_K:-20} EDGELLM_DEFAULT_PRESENCE_PENALTY=0.0 EDGELLM_REASONING_EFFORT_PASSTHROUGH=1 EDGELLM_IGNORE_UNSUPPORTED_PENALTIES=1 EDGELLM_PRESERVE_THINKING=1 EDGELLM_DEFAULT_MAX_TOKENS=${DEFAULT_MAX_TOKENS:-16384}"
+CHAT_ENV="EDGELLM_DEFAULT_ENABLE_THINKING=${THINKING:-1} EDGELLM_DEFAULT_TEMPERATURE=${TEMPERATURE:-1.0} EDGELLM_DEFAULT_TOP_P=${TOP_P:-0.9999} EDGELLM_DEFAULT_TOP_K=${TOP_K:-0} EDGELLM_DEFAULT_PRESENCE_PENALTY=0.0 EDGELLM_REASONING_EFFORT_PASSTHROUGH=1 EDGELLM_IGNORE_UNSUPPORTED_PENALTIES=1 EDGELLM_PRESERVE_THINKING=1 EDGELLM_DEFAULT_MAX_TOKENS=${DEFAULT_MAX_TOKENS:-16384}"
 # The bench times the server as it runs normally (sampling defaults, thinking on); the output caps are raised so a long reasoning block does not dominate. 4,096 tokens: not tuned for this model.
 export BENCH_SERVER_DEFAULTS=1 BENCH_NEEDLE_MAX_TOKENS=4096 BENCH_HUMANEVAL_MAX_TOKENS=4096
