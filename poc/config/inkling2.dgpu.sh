@@ -6,8 +6,10 @@
 KIND=inkling2
 NO_STOCK=1              # stock Edge-LLM cannot load this model: no looped-layer support, and every expert would have to fit on the GPU
 NO_SPEC=1               # plain autoregressive engine: the shipped drafter needs steps of more than 3 tokens, which skip the expert cache (about 2 s per step)
-BASE_REPO=${BASE_REPO:-}   # the Hugging Face repository of the original Inkling 2 Mini checkpoint (not set here: pass BASE_REPO=<repo>, or put the files in $MODELS_DIR/<name> and pass BASE_REPO=<owner>/<name>)
-[ -n "$BASE_REPO" ] || die "inkling2: set BASE_REPO to the Hugging Face repository of the Inkling 2 Mini checkpoint"
+# The original checkpoint: thinkingmachines/Inkling-2-Mini (Apache-2.0, not gated; one 19.5 GB shard with the NVFP4 experts of layers 0-19, MXFP8 experts of layers 20-23 and BF16 for the rest, plus a 67 MB drafter that is not used).
+# HF_REVISION pins the revision the preparation tools and the measurements below were validated on (a later revision only changed the model card; the weight shard is identical).
+BASE_REPO=${BASE_REPO:-thinkingmachines/Inkling-2-Mini}
+export HF_REVISION=${HF_REVISION:-b85c3cfa615fc413cc9af3379f491b963f3b586a}
 ASSIST_REPO=
 LONGCTX_DEFAULT=2048,8000,30000   # the engine's window is 262,144 tokens; prefill passes are 2,048 (MAXIN)
 # Preparation (poc/tools): NVFP4 experts of the shipped checkpoint repacked for the Marlin MoE plugin with one global scale per layer (inkling2_nvfp4_sidecar.py; the four MXFP8 layers are rounded to NVFP4 first),

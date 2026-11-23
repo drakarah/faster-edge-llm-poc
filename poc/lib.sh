@@ -24,7 +24,7 @@ tries, waited = int(os.environ.get("HF_RETRIES", "12")), 0
 for attempt in range(1, tries + 1):
     try:
         # two parallel connections: the free tier answers many parallel requests with HTTP 429; partial files resume
-        snapshot_download(repo_id=repo, local_dir=d, token=os.environ.get("HF_TOKEN") or None, max_workers=2,
+        snapshot_download(repo_id=repo, local_dir=d, token=os.environ.get("HF_TOKEN") or None, max_workers=2, revision=os.environ.get("HF_REVISION") or None,
                           ignore_patterns=["*.gguf", "*.msgpack", "*.h5", "original/*"])
         break
     except Exception as e:   # rate limit (429), server error, dropped connection
