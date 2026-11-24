@@ -23,7 +23,7 @@ ARG FAST_REF=ff5e1febe674aeaa18204b6d774dc046a320f72f
 # Pin moved from dev 786a71b to rtx4060/qwen-defaults-merge bb8d0a9 (786a71b plus presence penalty, preserved thinking, environment defaults for request fields, hybrid checkpoints in host memory): the served-endpoint defaults of the dgpu Qwen3.6 profile need them. The headline numbers below were measured on 786a71b; the added features are switched by environment variables and the speed numbers were not re-measured on the new pin.
 # Moved again to fork dev c3eb0eb (2c4e12e plus the stats page at /stats, the JSON at /api/stats and the memory figures: GPU, KV cache, expert cache, host, reuse snapshots); 2c4e12e was (10e2bf7 plus per-request timing at GET /stats, EDGELLM_REQUEST_STATS, and the idle sleep stage of the CPU miss workers, EDGELLM_MOE_CPU_IDLE_MS); 10e2bf7 was (bb8d0a9 plus the growable KV pool, EDGELLM_KV_INITIAL_TOKENS, which composes with context reuse; also reasoning budget and control-token defanging). Off unless the variable is set.
 # Moved to fork dev a85d5e7: Inkling 2 Mini merged into dev (expert offload, overlay, int8 CPU path, guided decoding that waits for the answer-opening marker, prefix-cache stats); the same tree passed the unit tests on sm_89 and serves Inkling.
-ARG FAST_REF_DGPU=a85d5e7
+ARG FAST_REF_DGPU=a85d5e79746f52580849cd7e63a305676c101dcf
 
 # Python dependencies of the exporter, the server and the quantisation tools (torch and numpy come from the base image).
 COPY poc/build/pins.txt /tmp/pins.txt
