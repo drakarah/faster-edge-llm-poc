@@ -6,6 +6,8 @@ die "inkling2-mini is a settings profile (see poc/inkling2/README.md): use poc/i
 KIND=inkling2
 NO_STOCK=1
 BASE_REPO=thinkingmachines/Inkling-2-Mini
+DRAFTER_DEFAULT=dflash2
+DRAFTER_REPO=incoai/Inkling-2-Mini-DFlash2   # 5 layers, 0.5B, apache-2.0, 990 MB; converted to a 1.06 GB INT8 file by poc/tools/inkling2_dflash2_int8.py
 # Engine: one 1,024-token prefill pass (longer prompts are chunked), KV capacity 32,768 (FP16 KV, 8 full-attention visits; the sliding-window visits keep a bounded 1,120-slot ring).
 MAXIN=1024; CAP=32768
 # Build environment, one reason each:
@@ -25,6 +27,6 @@ BUILD_ENV="EDGELLM_INT8_GEMV=attn+head EDGELLM_INKLING_FUSED_GATE=1 EDGELLM_INKL
 # Greedy and sampled single-sequence requests (sampled: every verify row is sampled from the target and a draft is accepted when the sample equals it; with a seed the output equals plain decoding's for short generations);
 # requests with logprobs, penalties, logit bias, guided decoding, a reasoning budget or a batch above one run the plain step. Output is not byte-identical run to run for long generations (the engine itself is not deterministic).
 SERVE_ENV="EDGELLM_INKLING_FUSED_RESIDUAL=1 EDGELLM_INKLING_SPEC=hybrid EDGELLM_INKLING_DRAFT_K=3 EDGELLM_INKLING_DRAFTER=\$DRAFTER_FILE"
-# Drafter choice: build_engine.sh writes drafter_int8.safetensors from the DSpark drafter of the checkpoint, or (DFLASH2_DIR set) from the community DFlash2 drafter incoai/Inkling-2-Mini-DFlash2
+# Drafter choice: build_engine.sh writes drafter_int8.safetensors from the community DFlash2 drafter incoai/Inkling-2-Mini-DFlash2 (DEFAULT) or, with DRAFTER=dspark, from the DSpark drafter of the checkpoint
 # (5 layers, one parallel pass, top-16 selector): hybrid K=3 40.67 tok/s against 37.64 with DSpark on the same engine, 25.99 plain (METRICS 209); K=3 stays the best (K=4 39.27, K=5 38.77).
 # Not set on purpose: EDGELLM_INKLING_DRAFT_K=auto (33.4 tok/s, below fixed K=3).
