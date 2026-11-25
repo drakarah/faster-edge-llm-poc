@@ -20,6 +20,7 @@ BUILD_ENV="EDGELLM_INT8_GEMV=attn+head EDGELLM_INKLING_FUSED_GATE=1 EDGELLM_INKL
 #   lookup    n-gram lookup only (no drafter file needed): +18.7% on the 36 code/prose prompts, +4.9% on the reasoning set
 #   drafter   the drafter's EDGELLM_INKLING_DRAFT_K drafts (3 is best: 2 -> 32.3, 3 -> 33.7, 4 -> 29.6 tok/s): +29.7% / +19.7%
 #   hybrid    the drafter, except a lookup match of 6+ tokens takes a window of up to 8 rows: +37.6% on the 36 prompts (35.77 vs 25.99 tok/s)
-# Greedy single-sequence requests only; every other request runs the plain step. Output is not byte-identical run to run (the engine itself is not deterministic).
+# Greedy and sampled single-sequence requests (sampled: every verify row is sampled from the target and a draft is accepted when the sample equals it; with a seed the output equals plain decoding's for short generations);
+# requests with logprobs, penalties, logit bias, guided decoding, a reasoning budget or a batch above one run the plain step. Output is not byte-identical run to run for long generations (the engine itself is not deterministic).
 SERVE_ENV="EDGELLM_INKLING_FUSED_RESIDUAL=1 EDGELLM_INKLING_SPEC=hybrid EDGELLM_INKLING_DRAFT_K=3 EDGELLM_INKLING_DRAFTER=\$DRAFTER_FILE"
 # Not set on purpose: EDGELLM_INT8_MMA=1 at build (tensor-core dense path: +3 ms plain decode, only -6% at an 8-row verify) and EDGELLM_INKLING_DRAFT_K=auto (33.4 tok/s, below fixed K=3).

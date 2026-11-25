@@ -505,7 +505,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 * **Buffer placement does not explain run-to-run kernel speed (Orin).** A pure read of the 16.2 MB (qkv) and 60.8 MB (gate/up) weights from 11 start offsets (16 B to 4 KiB alignment, positions up to 333 MiB) varied by under 0.5% (97.1-97.8 and 346.3-349.6 us).
 * **Stock Edge-LLM's default speculative setting is slower than no speculation (Orin, E4B).** Default MTP (chain of 6, verify size 7) 19.2 tok/s, 3 steps / verify 4 24.0, 2 / 3 25.9, no speculation 29.0, and the tree flags used here (top-k 2, 5 steps, tree 12) 32.3 tok/s; the benchmark's stock arm uses the last.
 
-#### Inkling 2 Mini (settings profile; fork `dev` aafa931)
+#### Inkling 2 Mini (settings profile; fork `dev` f479145)
 
 | change | what it does | effect | in the profile | where |
 |---|---|---|---|---|
@@ -745,7 +745,7 @@ HumanEval pass@1 (greedy, public benchmark), per round: optimised 160/164 / 157/
 
 #### inkling2-mini (optimised arm only, settings profile, not run through `docker compose`)
 
-No stock arm (stock Edge-LLM has no Inkling support). Fork `dev` aafa931, engine built with the settings of `config/inkling2-mini.sh`, greedy, decode tokens/s = generated tokens / (wall time - prefill time), one run per cell, GPU at its MAXN clock. Prompts: 36 code and prose requests (256 tokens each) and 16 reasoning requests with thinking on (384 tokens each); the engine is not deterministic, so outputs differ between runs by a few hundred characters in; draft acceptance in the engine matches an offline simulation against plain greedy tokens.
+No stock arm (stock Edge-LLM has no Inkling support). Fork `dev` aafa931 (the HTTP-server row at the end of this block: f479145), engine built with the settings of `config/inkling2-mini.sh`, greedy, decode tokens/s = generated tokens / (wall time - prefill time), one run per cell, GPU at its MAXN clock. Prompts: 36 code and prose requests (256 tokens each) and 16 reasoning requests with thinking on (384 tokens each); the engine is not deterministic, so outputs differ between runs by a few hundred characters in; draft acceptance in the engine matches an offline simulation against plain greedy tokens.
 
 | decode tokens/s (higher is better) | 36 code/prose prompts | 16 reasoning prompts |
 |---|---:|---:|
@@ -753,7 +753,9 @@ No stock arm (stock Edge-LLM has no Inkling support). Fork `dev` aafa931, engine
 | n-gram lookup | 30.85 (+18.7%) | 28.15 (+4.9%) |
 | drafter, 3 drafts | 33.72 (+29.7%) | 32.11 (+19.7%) |
 | drafter, 2 drafts / 4 drafts | 32.31 / 29.61 | not run |
-| hybrid (drafter + lookup) | **35.77 (+37.6%)** | not run |
+| hybrid (drafter + lookup) | **35.77 (+37.6%)** | 31.74 (+18.3%; no gain over the drafter alone: long n-gram matches are rare in thinking text) |
+
+Through the HTTP server (`poc/inkling2/serve_http.sh`, fork `dev` f479145) with **sampled** requests (temperature 0.7, top_p 0.95, a seed per request; 12 of the 36 prompts, 256 tokens): plain 25.78 tok/s, hybrid 33.57 (+30.2%, five runs 32.67 to 34.26). For the same seed the hybrid output equals plain decoding's in 400 of 400 short requests (12 tokens, temperature 1.0); long generations diverge after a few hundred characters because the engine is not bit-stable.
 
 Verify round (one pass over the committed token plus drafts, ms, lower is better): 2 rows 49.0, 3 rows 60.7, 4 rows 66.8, 5 rows 87.0, 6 rows 92.0, 7 rows 96.7, 8 rows 101.0, against 36.5 for a plain step. Details, raw logs and the negative results are in the docs repo (METRICS 199-201).
 
