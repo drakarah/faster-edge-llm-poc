@@ -18,7 +18,7 @@ x-poc: &poc
     ONNX_MIRROR_URL: ${ONNX_MIRROR_URL:-}
     ONNX_DIR: ${ONNX_DIR:-}
     CACHE_BIAS: ${CACHE_BIAS:-0.5}
-    TAIL_SKIP: ${TAIL_SKIP:-0}
+    TAIL_SKIP: ${TAIL_SKIP:-}
     CPU_MISS: ${CPU_MISS:-1}
     CPU_ADMIT: ${CPU_ADMIT:-16}
     CPU_INT8: ${CPU_INT8:-1}
