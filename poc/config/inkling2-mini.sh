@@ -14,7 +14,9 @@ MAXIN=1024; CAP=32768
 #  EDGELLM_INKLING_FUSED_QRSG=1       one INT8 GEMV for q, gate, rel and sink (-0.5 ms per token)
 #  EDGELLM_INKLING_VERIFY=8           generation profile of 1..8 tokens: chain verification of up to 7 drafted tokens. Adds per-token conv states (the rollback after a partly accepted window) and
 #                                     the four drafter taps as engine outputs; plain decode costs +2.4 ms for them (36.5 vs 34.0 ms per token).
-BUILD_ENV="EDGELLM_INT8_GEMV=attn+head EDGELLM_INKLING_FUSED_GATE=1 EDGELLM_INKLING_FUSED_QRSG=1 EDGELLM_INKLING_VERIFY=8 EDGELLM_INKLING_FUSED_RESIDUAL=1"
+#  EDGELLM_INT8_MMA=1                 the INT8 dense weights are stored in mma order and run on tensor cores with split-K and batched loads for 1..8 tokens: a verify round of 5-8 rows is
+#                                     about 10 ms cheaper, 3-4 rows 2-3 ms; hybrid K=3 +2.7% (36.75 against 35.77 tok/s), plain 1-token decode +1.25 ms (3.4%) and prefill +3.9% slower (METRICS 208)
+BUILD_ENV="EDGELLM_INT8_GEMV=attn+head EDGELLM_INKLING_FUSED_GATE=1 EDGELLM_INKLING_FUSED_QRSG=1 EDGELLM_INKLING_VERIFY=8 EDGELLM_INKLING_FUSED_RESIDUAL=1 EDGELLM_INT8_MMA=1"
 # Drafter: the DSpark block drafter that ships in the checkpoint (mtp.safetensors: 3 layers, rank-256 recurrent Markov head over the target's four taps), converted by poc/tools/inkling2_drafter_int8.py
 # to an 884 MB INT8 file (tensor-core INT8 GEMV, Markov correction folded into the vocabulary space). EDGELLM_INKLING_SPEC picks the draft source:
 #   lookup    n-gram lookup only (no drafter file needed): +18.7% on the 36 code/prose prompts, +4.9% on the reasoning set
@@ -23,4 +25,6 @@ BUILD_ENV="EDGELLM_INT8_GEMV=attn+head EDGELLM_INKLING_FUSED_GATE=1 EDGELLM_INKL
 # Greedy and sampled single-sequence requests (sampled: every verify row is sampled from the target and a draft is accepted when the sample equals it; with a seed the output equals plain decoding's for short generations);
 # requests with logprobs, penalties, logit bias, guided decoding, a reasoning budget or a batch above one run the plain step. Output is not byte-identical run to run for long generations (the engine itself is not deterministic).
 SERVE_ENV="EDGELLM_INKLING_FUSED_RESIDUAL=1 EDGELLM_INKLING_SPEC=hybrid EDGELLM_INKLING_DRAFT_K=3 EDGELLM_INKLING_DRAFTER=\$DRAFTER_FILE"
-# Not set on purpose: EDGELLM_INT8_MMA=1 at build (tensor-core dense path: +3 ms plain decode, only -6% at an 8-row verify) and EDGELLM_INKLING_DRAFT_K=auto (33.4 tok/s, below fixed K=3).
+# Drafter choice: build_engine.sh writes drafter_int8.safetensors from the DSpark drafter of the checkpoint, or (DFLASH2_DIR set) from the community DFlash2 drafter incoai/Inkling-2-Mini-DFlash2
+# (5 layers, one parallel pass, top-16 selector): hybrid K=3 40.67 tok/s against 37.64 with DSpark on the same engine, 25.99 plain (METRICS 209); K=3 stays the best (K=4 39.27, K=5 38.77).
+# Not set on purpose: EDGELLM_INKLING_DRAFT_K=auto (33.4 tok/s, below fixed K=3).

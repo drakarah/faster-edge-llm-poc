@@ -1,6 +1,7 @@
 #!/bin/bash
 # Builds the Inkling 2 Mini engine with the settings of poc/config/inkling2-mini.sh and the INT8 drafter file.
-# usage: build_engine.sh CHECKPOINT_DIR ENGINE_DIR   (run inside the builder image; CHECKPOINT_DIR = converted Inkling 2 checkpoint, also holding the original hf files for the drafter)
+# usage: [DFLASH2_DIR=<incoai/Inkling-2-Mini-DFlash2 download>] build_engine.sh CHECKPOINT_DIR ENGINE_DIR   (DFLASH2_DIR set: the DFlash2 drafter file, else the DSpark drafter of the checkpoint)
+#        original usage: build_engine.sh CHECKPOINT_DIR ENGINE_DIR   (run inside the builder image; CHECKPOINT_DIR = converted Inkling 2 checkpoint, also holding the original hf files for the drafter)
 set -euo pipefail
 CK=${1:?checkpoint dir}; OUT=${2:?engine dir}
 HF=${HF_DIR:-$CK}                                    # directory with mtp.safetensors and the target safetensors (embedding norm, unembedding)
@@ -14,5 +15,9 @@ sys.argv = ['build', '--model-dir', ck, '--engine-dir', out, '--max-input-len', 
 from experimental.builder.cli import main
 main()
 PY
-python3 "$POC/tools/inkling2_drafter_int8.py" "$HF" "$OUT/drafter_int8.safetensors"
+if [ -n "${DFLASH2_DIR:-}" ]; then   # the community DFlash2 drafter (incoai/Inkling-2-Mini-DFlash2): +10.7% over the shipped DSpark drafter at K=3 (METRICS 209)
+  python3 "$POC/tools/inkling2_dflash2_int8.py" "$DFLASH2_DIR/model.safetensors" "$HF" "$OUT/drafter_int8.safetensors"
+else
+  python3 "$POC/tools/inkling2_drafter_int8.py" "$HF" "$OUT/drafter_int8.safetensors"
+fi
 echo "engine and drafter written to $OUT"
