@@ -505,7 +505,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 * **Buffer placement does not explain run-to-run kernel speed (Orin).** A pure read of the 16.2 MB (qkv) and 60.8 MB (gate/up) weights from 11 start offsets (16 B to 4 KiB alignment, positions up to 333 MiB) varied by under 0.5% (97.1-97.8 and 346.3-349.6 us).
 * **Stock Edge-LLM's default speculative setting is slower than no speculation (Orin, E4B).** Default MTP (chain of 6, verify size 7) 19.2 tok/s, 3 steps / verify 4 24.0, 2 / 3 25.9, no speculation 29.0, and the tree flags used here (top-k 2, 5 steps, tree 12) 32.3 tok/s; the benchmark's stock arm uses the last.
 
-#### Inkling 2 Mini (settings profile; fork `dev` c18ec8c)
+#### Inkling 2 Mini (settings profile; fork `dev` fe81c9f)
 
 | change | what it does | effect | in the profile | where |
 |---|---|---|---|---|
@@ -757,7 +757,7 @@ No stock arm (stock Edge-LLM has no Inkling support). Fork `dev` aafa931 (the HT
 
 Through the HTTP server (`poc/inkling2/serve_http.sh`, fork `dev` f479145) with **sampled** requests (temperature 0.7, top_p 0.95, a seed per request; 12 of the 36 prompts, 256 tokens): plain 25.78 tok/s, hybrid 33.57 (+30.2%, five runs 32.67 to 34.26). For the same seed the hybrid output equals plain decoding's in 400 of 400 short requests (12 tokens, temperature 1.0); long generations diverge after a few hundred characters because the engine is not bit-stable. With context reuse on (multi-turn chat, greedy, 200 tokens per turn, nine reused turns): plain 24.83 tok/s, hybrid 30.25 (+21.8%); the drafter resumes from the previous request's rows when the reused prompt tokens match.
 
-With the INT8 mma dense path (`EDGELLM_INT8_MMA=1`, fork `dev` c18ec8c) and the community **DFlash2 drafter** (`incoai/Inkling-2-Mini-DFlash2`, the default of `poc/inkling2/build_engine.sh`; `DRAFTER=dspark` builds the shipped drafter instead), hybrid K=3 on the same 36 prompts: **40.67 tok/s (+56.5% over plain 25.99)**; the DSpark drafter on that engine 37.64. HTTP server, sampled requests (12 prompts, temperature 0.7): 38.99 tok/s against 25.78 plain; reused conversation turns take 5.6 to 6.2 s against 8.1 s plain (200 tokens). K=3 is the best draft count (K=4 39.27, K=5 38.77). The draft call takes 9.1 ms (profiled, METRICS 209).
+With the INT8 mma dense path (`EDGELLM_INT8_MMA=1`, including the fused attention projection, fork `dev` fe81c9f) and the community **DFlash2 drafter** (`incoai/Inkling-2-Mini-DFlash2`, the default of `poc/inkling2/build_engine.sh`; `DRAFTER=dspark` builds the shipped drafter instead), hybrid on the same 36 prompts: **K=4 44.35 tok/s (+71% over plain 25.99)**, K=3 42.70, K=5 43.78, K=6 42.65 (the DSpark drafter on the earlier mma engine: 37.64). The draft call takes 9.1 ms (profiled, METRICS 209). On that engine prefill is 8% slower than on the rows-format engine (122 s against 113 s for the 36 prompts) and plain 1-token decode 4% slower. HTTP server, sampled requests (12 prompts, temperature 0.7, K=3 on the earlier mma engine): 38.99 tok/s against 25.78 plain; reused conversation turns take 5.6 to 6.2 s against 8.1 s plain (200 tokens).
 
 Verify round (one pass over the committed token plus drafts, ms, lower is better): 2 rows 49.0, 3 rows 60.7, 4 rows 66.8, 5 rows 87.0, 6 rows 92.0, 7 rows 96.7, 8 rows 101.0, against 36.5 for a plain step. Details, raw logs and the negative results are in the docs repo (METRICS 199-201).
 
