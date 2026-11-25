@@ -2,7 +2,7 @@
 
 usage: inkling2_merge_checkpoint.py ORIGINAL_DIR MERGED_DIR
 
-Every file of ORIGINAL_DIR is linked into MERGED_DIR (the sidecar tools then add their own files and rewrite the index there),
+Every file of ORIGINAL_DIR is linked into MERGED_DIR, except the two the sidecar tools rewrite (the weight index and hf_quant_config.json), which are copied so the original model dir is never modified,
 except config.json, which is copied with two changes:
   - text_config.kv_cache_dtype = "fp8": the engine keeps the FP8 KV cache with unit scales (the checkpoint ships no KV scales);
   - the top-level quantization_config (modelopt NVFP4) is dropped: the quantisation of the dense projections is described by the
@@ -10,14 +10,27 @@ except config.json, which is copied with two changes:
 """
 import json
 import os
+import shutil
 import sys
+
+
+COPIED = ("model.safetensors.index.json", "hf_quant_config.json")
 
 
 def merge(original: str, merged: str) -> None:
     os.makedirs(merged, exist_ok=True)
     for name in sorted(os.listdir(original)):
         target = os.path.join(merged, name)
-        if name == "config.json" or os.path.lexists(target):
+        if name == "config.json":
+            continue
+        if name in COPIED:
+            # the sidecar tools rewrite these in MERGED_DIR; a symlink would make them overwrite the original model's file
+            if os.path.islink(target):
+                os.remove(target)
+            if not os.path.lexists(target):
+                shutil.copyfile(os.path.join(original, name), target)
+            continue
+        if os.path.lexists(target):
             continue
         os.symlink(os.path.abspath(os.path.join(original, name)), target)
     with open(os.path.join(original, "config.json"), encoding="utf-8") as f:
