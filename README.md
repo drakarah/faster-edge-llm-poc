@@ -92,6 +92,7 @@ BENCH_URL=http://host.docker.internal:8080 BENCH_LABEL=stock docker compose run 
 | **CyberTiel** (Huihui-Ornith-1.5-35B-A3B-abliterated, a Qwen3.6-architecture 35B-A3B with its refusals removed; INT4 export, `MODEL=cybertiel-35b`) | RTX 4060 8 GB (mini PC), 31 GB RAM | a 262,144-token window with a growable KV pool, context reuse and the terse Sharp chat template, see [long context and agents](#long-context-and-agents-qwen36-and-cybertiel-on-the-rtx-4060). Cold prefill about 1,300 tok/s on 1,600-token prompts; decode 68-78 tok/s at 5k-65k tokens of context (model card, one run per cell). Bench through `docker compose` (one round, thinking on as served): see [Results](#cybertiel-35b-optimised-arm-only). **No refusals: run agents on it in a sandbox** |
 | **CyberTiel on the Jetson** (`PROFILE=orin MODEL=cybertiel-35b`) | Jetson AGX Orin 32 GB | all experts on the GPU (no expert cache, no CPU miss path), 262,144-token KV (INT8, 2.7 GB), passes of 12,288 tokens, context reuse with host snapshots, the Sharp template, `--reasoning-parser qwen3`. Plain engine 55.8 tok/s (24-token prompt), 52.3 at 18k; with the MTP drafter (chain of 2, 49k-token domain vocabulary, in the export's `mtp/` folder) 75.8 tok/s on code and 62.9 on prose, HumanEval 146/164 both, generation 77.5 vs 52.1 tok/s. With n-gram lookup windows on top (`EDGELLM_MTP_LOOKUP=7`, the profile's default): HumanEval 134/164 both with it off and on, generation 73.1 -> 92.1 tok/s overall, code edits 78.5 -> 104-138 tok/s, prose unchanged. Measured on a hand-built engine with the same settings, one run per cell; the PoC profile itself has not been run end to end from a clean data directory. **No refusals: run agents on it in a sandbox** |
 | **Qwen3.8-27B on the Jetson** (`PROFILE=orin MODEL=qwen38-27b`, [RedHatAI/Qwen3.8-27B-INT4](https://huggingface.co/RedHatAI/Qwen3.8-27B-INT4) with the [z-lab/Qwen3.8-27B-DFlash2](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2) block drafter) | Jetson AGX Orin 32 GB | dense hybrid (48 gated delta-net + 16 attention layers), INT4 GPTQ g128 with an INT4 `lm_head`, INT8 KV cache from the checkpoint's own FP8 scales mapped on demand, 262,144-token engine (about 211k tokens tested), context reuse. Drafter: DFlash2 quantised to INT4 (a block of 8 tokens per round), verified as a 16-row draft tree over its top-8 candidates per position. Sampling, presence penalty, JSON schema and the hard reasoning budget work under the tree. Measured on the Jetson, single stream, greedy, 8 prompts x 300 tokens: prose 27.5 tok/s, new code 47.4 tok/s (the MTP profile: 20.5 and 27.2 on single prompts); sampled prose 24.7; thinking on 27.0 tok/s against 18.6 for MTP. Cold prefill 8,244 tokens in 19.0 s and 39,420 tokens in about 101 s (about 390-430 tok/s); a reused 20k-token prefix answers in under a second; needles found at 175,852 and 205,725 tokens. Measured on a hand-built engine with these settings; the profile has not been run through `docker compose` from a clean data directory (the drafter quantisation tool was checked to reproduce the measured checkpoint bit for bit). `MODEL=qwen38-27b-mtp` is the earlier profile with the model's own MTP layer as the drafter (131,072-token window, about 3 GB less memory; 32.4 / 27.2 / 20.5 tok/s greedy on a code-edit, a new-code and an essay prompt, HumanEval 152 of 164). |
+| **Inkling 2 Mini on the Jetson** (settings profile `poc/config/inkling2-mini.sh`, by-hand scripts in `poc/inkling2/`; not run through compose) | Jetson AGX Orin 32 GB | a looped 26B mixture of experts (48 layer visits, 128 experts top-8) at 25.99 tok/s plain and **35.77 tok/s with its own DSpark drafter plus n-gram lookup (+37.6%)** on 36 code/prose prompts; results below |
 | Gemma 4 26B-A4B (mixture of experts) | RTX 4060 laptop 8 GB, Jetson AGX Orin 32 GB | measured, see the results below |
 | Gemma 4 12B and E4B, Qwen3.5-4B | RTX 4060 laptop 8 GB, Jetson AGX Orin 32 GB | measured, side by side with stock NVIDIA Edge-LLM |
 
@@ -452,6 +453,18 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 * **Buffer placement does not explain run-to-run kernel speed (Orin).** A pure read of the 16.2 MB (qkv) and 60.8 MB (gate/up) weights from 11 start offsets (16 B to 4 KiB alignment, positions up to 333 MiB) varied by under 0.5% (97.1-97.8 and 346.3-349.6 us).
 * **Stock Edge-LLM's default speculative setting is slower than no speculation (Orin, E4B).** Default MTP (chain of 6, verify size 7) 19.2 tok/s, 3 steps / verify 4 24.0, 2 / 3 25.9, no speculation 29.0, and the tree flags used here (top-k 2, 5 steps, tree 12) 32.3 tok/s; the benchmark's stock arm uses the last.
 
+#### Inkling 2 Mini (settings profile; fork `dev` aafa931)
+
+| change | what it does | effect | in the profile | where |
+|---|---|---|---|---|
+| Chain verification with per-token conv states (`EDGELLM_INKLING_VERIFY=8` at build) | the generation profile takes 1..8 tokens; the short-convolution plugin writes the conv state after every token (third output, `intermediate`), so a partly accepted window restores the state of the last accepted token; the four drafter taps are engine outputs | verify round 49 ms (2 rows) to 101 ms (8 rows) against 36.5 ms plain; plain decode +2.4 ms for the extra outputs | yes | `cpp/plugins/inkling2ShortConvPlugin`, `cpp/runtime/decoding/vanillaDecoder.cpp` |
+| N-gram lookup windows (`EDGELLM_INKLING_SPEC=lookup`) | proposals from a suffix cache of the request's own output, priced by measured tokens per ms | +18.7% (36 prompts), +4.9% (reasoning set) | in `hybrid` | `vanillaDecoder.cpp` (policy: `lookupDraftPolicy.h`) |
+| INT8 DSpark drafter (`EDGELLM_INKLING_SPEC=drafter`, `poc/tools/inkling2_drafter_int8.py`) | the checkpoint's block drafter (3 layers, rank-256 recurrent Markov head) as a 884 MB INT8 file: tensor-core INT8 GEMV, Markov correction folded into the vocabulary space, own context K/V, behind the pluggable `IDraftSource` interface | +29.7% (36 prompts), +19.7% (reasoning set) at 3 drafts; about 12 ms per draft | yes | `cpp/runtime/decoding/inklingDrafter.*`, `cpp/kernels/inklingDrafter` |
+| Hybrid source (`EDGELLM_INKLING_SPEC=hybrid`) | drafter drafts, a lookup match of 6+ tokens takes a window of up to 8 rows | +37.6% (35.77 vs 25.99 tok/s) | yes | `vanillaDecoder.cpp` |
+| Dense INT8 GEMV for 3 to 8 tokens | widens the warp-per-row GEMV from 4 to 8 tokens and adds a 2-rows-per-warp kernel (bit-identical results); the GEMM path made 5+ row verifies 20-30 ms slower | verify at 5-8 rows about 20% faster | yes (all INT8/FP8 linear users) | `cpp/kernels/fp8Linear` |
+| Tensor-core INT8 dense path (`EDGELLM_INT8_MMA=1`) | mma-ordered INT8 bytes, tensor cores for every token count | negative: plain decode +3 ms, 8-row verify -6% | no (opt-in) | `cpp/kernels/fp8Linear`, `experimental/builder/ops/functional/fp8.py` |
+| Automatic draft count (`EDGELLM_INKLING_DRAFT_K=auto`) | picks the verified draft count per round from the running acceptance | negative: 33.4 vs 35.8 tok/s | no (opt-in) | `vanillaDecoder.cpp` |
+
 ### Earlier items (Jetson AGX Orin unless stated)
 
 
@@ -492,7 +505,8 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | `poc/run.sh`, `poc/lib.sh` | the pipeline: prepare (download export or quantise, build engine), serve, benchmark |
 | `poc/config/` | engine and server settings per model and profile, each value with its reason |
 | `poc/bench.py` | the timing harness and report; works against any OpenAI-compatible server |
-| `poc/tools/` | the quantisation tools (layer-wise GPTQ for Gemma and Qwen3.6, INT8 embeddings, reduced draft vocabulary, INT8 KV calibration) |
+| `poc/tools/` | the quantisation tools (layer-wise GPTQ for Gemma and Qwen3.6, INT8 embeddings, reduced draft vocabulary, INT8 KV calibration, the Inkling 2 drafter converter) |
+| `poc/inkling2/` | by-hand build and run scripts of the Inkling 2 Mini settings profile (`config/inkling2-mini.sh`) |
 | `poc/data/` | recorded workload, INT8 KV-cache scales, draft vocabulary maps, the Sharp chat template of the CyberTiel profile (Apache-2.0, with its notice) |
 
 </details>
@@ -666,6 +680,20 @@ HumanEval pass@1 (greedy, public benchmark), per round: optimised 160/164 / 157/
 |  | warm time to first token, s | 1.02 |
 |  | decode tokens/s at this context | 75.0 |
 |  | needles correct of 3 | 3 |
+
+#### inkling2-mini (optimised arm only, settings profile, not run through `docker compose`)
+
+No stock arm (stock Edge-LLM has no Inkling support). Fork `dev` aafa931, engine built with the settings of `config/inkling2-mini.sh`, greedy, decode tokens/s = generated tokens / (wall time - prefill time), one run per cell, GPU at its MAXN clock. Prompts: 36 code and prose requests (256 tokens each) and 16 reasoning requests with thinking on (384 tokens each); the engine is not deterministic, so outputs differ between runs by a few hundred characters in; draft acceptance in the engine matches an offline simulation against plain greedy tokens.
+
+| decode tokens/s (higher is better) | 36 code/prose prompts | 16 reasoning prompts |
+|---|---:|---:|
+| plain | 25.99 | 26.83 |
+| n-gram lookup | 30.85 (+18.7%) | 28.15 (+4.9%) |
+| drafter, 3 drafts | 33.72 (+29.7%) | 32.11 (+19.7%) |
+| drafter, 2 drafts / 4 drafts | 32.31 / 29.61 | not run |
+| hybrid (drafter + lookup) | **35.77 (+37.6%)** | not run |
+
+Verify round (one pass over the committed token plus drafts, ms, lower is better): 2 rows 49.0, 3 rows 60.7, 4 rows 66.8, 5 rows 87.0, 6 rows 92.0, 7 rows 96.7, 8 rows 101.0, against 36.5 for a plain step. Details, raw logs and the negative results are in the docs repo (METRICS 199-201).
 
 ### RTX 4060 8 GB (`PROFILE=dgpu`; GPU clock locked at 2,460 MHz; fork `dev` 2e02476, the 26B at 481a34c content)
 
