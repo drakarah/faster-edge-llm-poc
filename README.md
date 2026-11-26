@@ -505,7 +505,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 * **Buffer placement does not explain run-to-run kernel speed (Orin).** A pure read of the 16.2 MB (qkv) and 60.8 MB (gate/up) weights from 11 start offsets (16 B to 4 KiB alignment, positions up to 333 MiB) varied by under 0.5% (97.1-97.8 and 346.3-349.6 us).
 * **Stock Edge-LLM's default speculative setting is slower than no speculation (Orin, E4B).** Default MTP (chain of 6, verify size 7) 19.2 tok/s, 3 steps / verify 4 24.0, 2 / 3 25.9, no speculation 29.0, and the tree flags used here (top-k 2, 5 steps, tree 12) 32.3 tok/s; the benchmark's stock arm uses the last.
 
-#### Inkling 2 Mini (settings profile; fork `dev` e44befd)
+#### Inkling 2 Mini (settings profile; fork `dev` 166bfdb)
 
 | change | what it does | effect | in the profile | where |
 |---|---|---|---|---|
@@ -516,7 +516,7 @@ Legend for the last-but-one column: **yes** = switched on in the benchmark's opt
 | Dense INT8 GEMV for 3 to 8 tokens | widens the warp-per-row GEMV from 4 to 8 tokens and adds a 2-rows-per-warp kernel (bit-identical results); the GEMM path made 5+ row verifies 20-30 ms slower | verify at 5-8 rows about 20% faster | yes (all INT8/FP8 linear users) | `cpp/kernels/fp8Linear` |
 | Tensor-core INT8 dense path (`EDGELLM_INT8_MMA=1`) | mma-ordered INT8 bytes, tensor cores for every token count | negative: plain decode +3 ms, 8-row verify -6% | no (opt-in) | `cpp/kernels/fp8Linear`, `experimental/builder/ops/functional/fp8.py` |
 | Automatic draft count (`EDGELLM_INKLING_DRAFT_K=auto`) | picks the verified draft count per round from the running acceptance | negative: 33.4 vs 35.8 tok/s | no (opt-in) | `vanillaDecoder.cpp` |
-| Multi-token decode attention for verify windows | one block serves up to 16/group query tokens of a sequence, so a 5-token window streams the KV cache once instead of five times (engine launch 170.6 -> 104.9 us) | hybrid K=4 +2.3% | yes (switch `INKLING2_NO_DECODE_MULTI=1`) | `cpp/kernels/inkling2Attention` |
+| Multi-token decode attention for verify windows | one block serves up to 16/group query tokens of a sequence, so a 5-token window streams the KV cache once instead of five times (engine launch 170.6 -> 104.9 us; after the prologue/merge work 83.2 us, fork `dev` 166bfdb) | hybrid K=4 +2.3% | yes (switch `INKLING2_NO_DECODE_MULTI=1`) | `cpp/kernels/inkling2Attention` |
 | Thread-per-channel message-gate stage 2 and fused norm + router plugin | gate apply 22.6 -> 9.7 us at 5 tokens; router GEMM on tensor cores (TF32 hi/lo split) | with the attention kernel hybrid K=4 44.52 -> 46.71 tok/s (+4.9%, same session, two runs per arm), plain decode 34.60 -> 34.06 ms | yes (engines must be rebuilt) | `cpp/kernels/inkling2MessageGate`, `cpp/kernels/inkling2NormRoute` |
 
 ### Earlier items (Jetson AGX Orin unless stated)
