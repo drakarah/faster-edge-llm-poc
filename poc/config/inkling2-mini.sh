@@ -9,7 +9,7 @@ BASE_REPO=thinkingmachines/Inkling-2-Mini
 DRAFTER_DEFAULT=dflash2
 DRAFTER_REPO=incoai/Inkling-2-Mini-DFlash2   # 5 layers, 0.5B, apache-2.0, 990 MB; converted to a 1.06 GB INT8 file by poc/tools/inkling2_dflash2_int8.py
 # Engine: one 1,024-token prefill pass (longer prompts are chunked), KV capacity 32,768 (FP16 KV, 8 full-attention visits; the sliding-window visits keep a bounded 1,120-slot ring).
-MAXIN=1024; CAP=32768
+MAXIN=1024; CAP=${CAP:-32768}   # CAP=262144 KV_INT8=1 builds the 262,144-token engine (INT8 KV, METRICS 192 and 245): serve it WITHOUT CONTEXT_REUSE (reuse keeps the sliding-window layers at full length and exhausts the Orin's memory)
 # Build environment, one reason each:
 #  EDGELLM_INT8_GEMV=attn+head        the dense attention projections and the LM head run as INT8 weight-only GEMVs (per-row RTN): -8% decode, quality in METRICS 194 of the docs repo
 #  EDGELLM_INKLING_FUSED_GATE=1       q/gate/rel/sink share one input: fused gate kernels
@@ -18,7 +18,8 @@ MAXIN=1024; CAP=32768
 #                                     the four drafter taps as engine outputs; plain decode costs +2.4 ms for them (36.5 vs 34.0 ms per token).
 #  EDGELLM_INT8_MMA=1                 the INT8 dense weights are stored in mma order and run on tensor cores with split-K and batched loads for 1..8 tokens: a verify round of 5-8 rows is
 #                                     about 10 ms cheaper, 3-4 rows 2-3 ms; hybrid K=3 +2.7% (36.75 against 35.77 tok/s), plain 1-token decode +1.25 ms (3.4%) and prefill +3.9% slower (METRICS 208)
-BUILD_ENV="EDGELLM_INT8_GEMV=attn+head EDGELLM_INKLING_FUSED_GATE=1 EDGELLM_INKLING_FUSED_QRSG=1 EDGELLM_INKLING_VERIFY=8 EDGELLM_INKLING_FUSED_RESIDUAL=1 EDGELLM_INT8_MMA=1"
+BUILD_ENV="EDGELLM_INT8_GEMV=attn+head EDGELLM_INKLING_FUSED_GATE=1 EDGELLM_INKLING_FUSED_QRSG=1 EDGELLM_INKLING_VERIFY=8 EDGELLM_INKLING_FUSED_RESIDUAL=1 EDGELLM_INT8_MMA=1 EDGELLM_INKLING_CONV_POST=1 EDGELLM_INKLING_NORM_ROUTE=1"   # the last two (short-conv epilogue, fused norm + router plugin) are the engine the numbers below were measured on (METRICS 227-229, 243)
+[ "${KV_INT8:-0}" = 1 ] && BUILD_ENV="$BUILD_ENV EDGELLM_INKLING_KV_INT8=1"
 # Drafter: the DSpark block drafter that ships in the checkpoint (mtp.safetensors: 3 layers, rank-256 recurrent Markov head over the target's four taps), converted by poc/tools/inkling2_drafter_int8.py
 # to an 884 MB INT8 file (tensor-core INT8 GEMV, Markov correction folded into the vocabulary space). EDGELLM_INKLING_SPEC picks the draft source:
 #   lookup    n-gram lookup only (no drafter file needed): +18.7% on the 36 code/prose prompts, +4.9% on the reasoning set
